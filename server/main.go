@@ -24,6 +24,7 @@ type Server struct {
 	mangaDir string
 	limiter  *loginLimiter
 	pages    map[string]*template.Template
+	closing  chan struct{} // closed when the server shuts down
 }
 
 func env(key, def string) string {
@@ -103,6 +104,7 @@ func main() {
 		keys:     keys,
 		mangaDir: mangaDir,
 		limiter:  &loginLimiter{fails: map[string][]time.Time{}},
+		closing:  make(chan struct{}),
 	}
 	s.loadTemplates()
 
@@ -128,6 +130,8 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+	// Live update streams never finish on their own.
+	srv.RegisterOnShutdown(func() { close(s.closing) })
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,6 +178,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets live update streams flush through the recorder.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func userCommand(db *DB, args []string) int {
 	if len(args) == 0 {

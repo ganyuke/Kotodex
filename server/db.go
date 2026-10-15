@@ -109,7 +109,10 @@ CREATE TABLE IF NOT EXISTS mdx_accounts(
 );
 `
 
-type DB struct{ *sql.DB }
+type DB struct {
+	*sql.DB
+	signedOut changes // sessions were removed, so live streams re-check theirs
+}
 
 func openDB(path string) (*DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
@@ -122,7 +125,7 @@ func openDB(path string) (*DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
-	return &DB{db}, nil
+	return &DB{DB: db}, nil
 }
 
 func now() int64 { return time.Now().Unix() }

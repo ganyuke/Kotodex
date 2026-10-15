@@ -285,6 +285,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p p
 		p.Notice = takeNotice(w, r)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if liveFragment(r) {
+		if err := s.pages[name].ExecuteTemplate(w, "live", p); err != nil {
+			log.Printf("render %s live: %v", name, err)
+		}
+		return
+	}
 	if err := s.pages[name].Execute(w, p); err != nil {
 		log.Printf("render %s: %v", name, err)
 	}
@@ -564,7 +570,6 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, "manga", pageData{Title: m.Title, Nav: "library", Data: map[string]any{
 		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current,
-		"Busy":  m.Queued > 0 || current != nil || m.Checked == 0,
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
 		"FollowCustom": linked && s.db.followChoice(u.ID, m.ID),
@@ -656,6 +661,7 @@ func (s *Server) chapterCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.State == stateQueued || c.State == stateFailed {
 		s.db.setChapterState(c.ID, stateSkipped)
+		s.dl.Changed()
 	}
 	back(w, r, "/manga/"+c.MangaID, "")
 }
@@ -708,7 +714,7 @@ func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 		"Queue": queue, "Queued": queued, "Failed": failed, "Status": st,
 		"LastCheck": unixOrZero(st.LastCheck), "NextCheck": unixOrZero(st.NextCheck),
 		"TotalSize": total, "TotalChapters": count, "History": history, "Page": page,
-		"HasOlder": page*historyPage < count, "Busy": st.Current != nil || st.Checking != "" || queued > 0,
+		"HasOlder": page*historyPage < count,
 	}})
 }
 
@@ -796,6 +802,7 @@ func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settingsSignOut(w http.ResponseWriter, r *http.Request) {
 	s.db.Exec(`DELETE FROM sessions WHERE hash=? AND user_id=?`, r.FormValue("hash"), currentUser(r).ID)
+	s.db.signedOut.notify()
 	back(w, r, "/settings", "Signed out.")
 }
 
@@ -897,6 +904,7 @@ func (s *Server) settingsDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.renderSettings(w, r, "Can't delete the last admin.")
 		return
 	}
+	s.db.signedOut.notify()
 	back(w, r, "/settings", "User deleted.")
 }
 
@@ -913,7 +921,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /search", s.web(false, s.searchPage))
 	mux.HandleFunc("POST /follow", s.web(false, s.followAction))
 	mux.HandleFunc("POST /unfollow", s.web(false, s.unfollowAction))
-	mux.HandleFunc("GET /manga/{id}", s.web(false, s.mangaPage))
+	mux.HandleFunc("GET /manga/{id}", s.web(false, s.live(s.mangaPage)))
 	mux.HandleFunc("POST /manga/{id}/check", s.web(false, s.mangaCheck))
 	mux.HandleFunc("POST /manga/{id}/download-all", s.web(false, s.mangaDownloadAll))
 	mux.HandleFunc("POST /manga/{id}/languages", s.web(false, s.mangaLanguages))
@@ -923,7 +931,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /chapter/{id}/download", s.web(false, s.chapterDownload))
 	mux.HandleFunc("POST /chapter/{id}/cancel", s.web(false, s.chapterCancel))
 	mux.HandleFunc("POST /chapter/{id}/delete", s.web(true, s.chapterDelete))
-	mux.HandleFunc("GET /downloads", s.web(false, s.downloadsPage))
+	mux.HandleFunc("GET /downloads", s.web(false, s.live(s.downloadsPage)))
 	mux.HandleFunc("POST /downloads/check", s.web(false, s.downloadsCheck))
 	mux.HandleFunc("POST /downloads/retry", s.web(false, s.downloadsRetry))
 	mux.HandleFunc("GET /settings", s.web(false, s.settingsPage))

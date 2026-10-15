@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -750,5 +752,84 @@ func TestNoticeShowsOnce(t *testing.T) {
 	res, _ = client.Get(ts.URL + "/manga/" + mangaA + "?notice=Sign+in+at+evil.example")
 	if strings.Contains(page(res), "evil.example") {
 		t.Fatal("notice taken from URL")
+	}
+}
+
+func TestLiveUpdates(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/downloads", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	body := bufio.NewReader(res.Body)
+	var event string
+	next := func() (string, error) {
+		var data []string
+		event = "message"
+		for {
+			line, err := body.ReadString('\n')
+			if err != nil {
+				return "", err
+			}
+			line = strings.TrimSuffix(line, "\n")
+			switch {
+			case line == "" && data != nil:
+				return strings.Join(data, "\n"), nil
+			case strings.HasPrefix(line, "event: "):
+				event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data:"):
+				data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			}
+		}
+	}
+
+	ev, err := next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ev, "<div data-live>") || strings.Contains(ev, "<html") || !strings.Contains(ev, "Nothing waiting to download.") {
+		t.Fatalf("first event: %s", ev)
+	}
+
+	s.db.setChapterState(chapter1, stateQueued)
+	s.dl.Wake()
+	if ev, err = next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
+		t.Fatalf("after queueing: %v %s", err, ev)
+	}
+
+	s.db.deleteSession(token)
+	if _, err = next(); err != nil || event != "signedout" {
+		t.Fatalf("expected signedout, got %q %v", event, err)
+	}
+	if ev, err = next(); err == nil {
+		t.Fatalf("stream still open after sign-out: %s", ev)
+	}
+}
+
+func TestLivePageStillPlain(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	req, _ := http.NewRequest("GET", ts.URL+"/manga/"+mangaA, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), "<div data-live>") {
+		t.Fatal("manga page should be a full page with its live section")
 	}
 }

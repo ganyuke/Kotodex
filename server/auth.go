@@ -128,6 +128,7 @@ func (db *DB) setPassword(userID int64, password string) error {
 		return err
 	}
 	_, err := db.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
+	db.signedOut.notify()
 	return err
 }
 
@@ -189,10 +190,12 @@ func (db *DB) sessionUser(token string) (*User, error) {
 // are refused anyway. This keeps them out of the device list.
 func (db *DB) deleteIdleSessions() {
 	db.Exec(`DELETE FROM sessions WHERE used < ?`, idleCutoff())
+	db.signedOut.notify()
 }
 
 func (db *DB) deleteSession(token string) {
 	db.Exec(`DELETE FROM sessions WHERE hash=?`, hashToken(token))
+	db.signedOut.notify()
 }
 
 type Session struct {

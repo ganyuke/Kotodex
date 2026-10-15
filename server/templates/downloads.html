@@ -7,7 +7,12 @@
     {{if $d.Failed}}<form method="post" action="/downloads/retry"><button class="secondary">Retry failed</button></form>{{end}}
   </div>
 </div>
-<div data-live{{if $d.Busy}} data-busy{{end}}>
+{{template "live" .}}
+{{end}}
+
+{{define "live"}}
+{{$d := .Data}}
+<div data-live>
 <div class="split">
   <div>
     <section class="card now">

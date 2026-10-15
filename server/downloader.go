@@ -29,6 +29,8 @@ type Downloader struct {
 	lastCheck time.Time
 	nextCheck time.Time
 	current   *Progress // chapter being downloaded, nil when idle
+
+	changed changes // what the live pages show
 }
 
 // Progress of the chapter being downloaded.
@@ -54,10 +56,14 @@ func newDownloader(db *DB, mdx *MangaDex, keys *Keys, dir string) *Downloader {
 	return &Downloader{db: db, mdx: mdx, keys: keys, dir: dir, wake: make(chan struct{}, 1), check: make(chan string, 64), resched: make(chan struct{}, 1)}
 }
 
+// Changed tells open pages to update.
+func (d *Downloader) Changed() { d.changed.notify() }
+
 func (d *Downloader) setChecking(s string) {
 	d.mu.Lock()
 	d.checking = s
 	d.mu.Unlock()
+	d.Changed()
 }
 
 func (d *Downloader) Status() Status {
@@ -77,9 +83,12 @@ func (d *Downloader) progress(f func(p *Progress)) {
 		f(d.current)
 	}
 	d.mu.Unlock()
+	d.Changed()
 }
 
+// Wake is called whenever the queue changed, so open pages update too.
 func (d *Downloader) Wake() {
+	d.Changed()
 	select {
 	case d.wake <- struct{}{}:
 	default:
@@ -132,6 +141,7 @@ func (d *Downloader) Run(ctx context.Context) {
 			d.mu.Lock()
 			d.nextCheck = next
 			d.mu.Unlock()
+			d.Changed()
 		case <-timer.C:
 			d.checkAll(ctx)
 			interval := d.db.settings().Interval
@@ -139,6 +149,7 @@ func (d *Downloader) Run(ctx context.Context) {
 			d.mu.Lock()
 			d.nextCheck = time.Now().Add(interval)
 			d.mu.Unlock()
+			d.Changed()
 		}
 	}
 }
@@ -294,10 +305,12 @@ func (d *Downloader) worker(ctx context.Context) {
 		d.mu.Lock()
 		d.current = &Progress{ChapterID: c.ID, MangaID: c.MangaID, MangaTitle: title, Label: chapterLabel(c), Total: c.Pages}
 		d.mu.Unlock()
+		d.Changed()
 		err = d.downloadChapter(ctx, c)
 		d.mu.Lock()
 		d.current = nil
 		d.mu.Unlock()
+		d.Changed()
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -309,6 +322,7 @@ func (d *Downloader) worker(ctx context.Context) {
 			log.Printf("download %s %s: %v", title, chapterLabel(c), err)
 			// Only if it's still queued. Canceling or deleting it meanwhile wins.
 			d.db.Exec(`UPDATE chapters SET tries=tries+1, error=?, state=? WHERE id=? AND state=?`, err.Error(), state, c.ID, stateQueued)
+			d.Changed()
 			select {
 			case <-ctx.Done():
 				return
@@ -409,6 +423,7 @@ func (d *Downloader) deleteChapterFiles(c *Chapter) error {
 		return err
 	}
 	_, err := d.db.Exec(`UPDATE chapters SET state=0, files='[]', size=0, downloaded=0, tries=0, error='' WHERE id=?`, c.ID)
+	d.Changed()
 	return err
 }
 

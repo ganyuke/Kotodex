@@ -11,24 +11,52 @@ document.addEventListener("change", (e) => {
 // from proxy headers.
 document.querySelectorAll("[data-origin]").forEach((el) => (el.textContent = location.origin));
 
-// Refresh the [data-live] part of the page in place: every 2 seconds while
-// something is downloading or being checked, every 15 seconds otherwise.
+// Keep the [data-live] part of the page up to date. The server sends a new
+// copy over an event stream whenever it changes. The stream is closed while
+// the tab is hidden, so background tabs don't each hold a connection open.
+//
+// The browser reconnects dropped streams by itself, but gives up for good
+// when a reconnect gets an error page (a proxy's 502 while the server
+// restarts). Then it's reopened here, waiting twice as long after each
+// failure, up to a minute. Signing out ends it for good.
 (() => {
-  const live = () => document.querySelector("[data-live]");
-  if (!live()) return;
-  const delay = () => (live()?.hasAttribute("data-busy") ? 2000 : 15000);
-  const tick = async () => {
-    if (!document.hidden) {
-      try {
-        const res = await fetch(location.href, { cache: "no-store" });
-        if (res.ok && !res.redirected) {
-          const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-          const fresh = doc.querySelector("[data-live]");
-          if (fresh && live()) live().replaceWith(fresh);
-        }
-      } catch {}
-    }
-    setTimeout(tick, delay());
+  if (!document.querySelector("[data-live]")) return;
+  const maxDelay = 60000;
+  let events = null;
+  let retry = null;
+  let delay = 1000;
+  let signedOut = false;
+  const close = () => {
+    events?.close();
+    events = null;
+    clearTimeout(retry);
+    retry = null;
   };
-  setTimeout(tick, delay());
+  const open = () => {
+    close();
+    events = new EventSource(location.href);
+    events.onopen = () => (delay = 1000);
+    events.onmessage = (e) => {
+      const fresh = new DOMParser().parseFromString(e.data, "text/html").querySelector("[data-live]");
+      const live = document.querySelector("[data-live]");
+      if (fresh && live) live.replaceWith(fresh);
+    };
+    events.addEventListener("signedout", () => {
+      signedOut = true;
+      close();
+    });
+    events.onerror = () => {
+      if (events?.readyState !== EventSource.CLOSED) return; // the browser is retrying
+      events = null;
+      if (signedOut || document.hidden) return;
+      // Random spread so tabs don't all come back at the same moment.
+      retry = setTimeout(open, delay / 2 + Math.random() * (delay / 2));
+      delay = Math.min(delay * 2, maxDelay);
+    };
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) close();
+    else if (!events && !signedOut) open();
+  });
+  if (!document.hidden) open();
 })();
