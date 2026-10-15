@@ -1,0 +1,4 @@
+See download progress and new chapters without reloading.
+Messages like "Saved." no longer stay in the address bar.
+Stopping the server takes 2 seconds at most.
+Error pages have the usual links at the top.
