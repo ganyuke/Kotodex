@@ -1,0 +1,1 @@
+Read Kotodex manga in Futon too, without allowing it first in the plugin app.
