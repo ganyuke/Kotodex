@@ -1,0 +1,94 @@
+{{define "content"}}
+{{$d := .Data}}{{$m := $d.Manga}}{{$admin := .User.Admin}}
+<div class="detail">
+  <div class="cover">{{if $d.Cover}}<img src="{{$d.Cover}}" alt="">{{end}}</div>
+  <div class="info">
+    <h1>{{$m.Title}}</h1>
+    {{if $m.Authors}}<p class="muted">{{join $m.Authors ", "}}{{if $m.Year}} · {{$m.Year}}{{end}}</p>{{end}}
+    <dl class="facts">
+      <dt>Status</dt><dd>{{title $m.Status}}</dd>
+      <dt>Downloaded</dt><dd>{{$m.Downloaded}} of {{$m.Known}} chapters{{if $d.Size}} ({{size $d.Size}}){{end}}</dd>
+      <dt>Followers</dt><dd>{{$m.Followers}}</dd>
+      {{if $d.Linked}}<dt>Your MangaDex</dt><dd>{{if $d.OnMangaDex}}Following{{else}}Not following{{end}}</dd>{{end}}
+      <dt>Last checked</dt><dd>{{ago $m.Checked}}</dd>
+      <dt>MangaDex</dt><dd><a href="https://mangadex.org/title/{{$m.ID}}" target="_blank" rel="noopener">Open on MangaDex</a></dd>
+    </dl>
+    <div class="buttons">
+      {{if $m.Following}}
+      <form method="post" action="/unfollow"><input type="hidden" name="id" value="{{$m.ID}}"><button class="secondary">Unfollow</button></form>
+      {{else}}
+      <form method="post" action="/follow"><input type="hidden" name="id" value="{{$m.ID}}"><button>Follow</button></form>
+      {{end}}
+      {{if $d.FollowCustom}}
+      <form method="post" action="/manga/{{$m.ID}}/follow/reset"><button class="secondary icon-button" title="Match MangaDex ({{if $d.OnMangaDex}}following there{{else}}not following there{{end}})" aria-label="Match MangaDex">{{template "reseticon"}}</button></form>
+      {{end}}
+      <form method="post" action="/manga/{{$m.ID}}/check"><button class="secondary">Check for new chapters</button></form>
+      {{if $admin}}<form method="post" action="/manga/{{$m.ID}}/delete-files" data-confirm="Delete every downloaded chapter of this manga?"><button class="danger">Delete downloads</button></form>{{end}}
+    </div>
+    {{if $m.Following}}
+    <form method="post" action="/manga/{{$m.ID}}/languages" class="langpick">
+      <span class="muted">Download new chapters in{{if not $d.LangsCustom}} (your defaults){{end}}</span>
+      {{range $d.LangChoices}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.FollowLangs .Code}} checked{{end}}> {{lang .Code}}</label>{{end}}
+      <span class="buttons">
+        <button class="small secondary">Save</button>
+        {{if $d.LangsCustom}}<button class="small secondary icon-button" formaction="/manga/{{$m.ID}}/languages/reset" title="Use your default languages" aria-label="Use your default languages">{{template "reseticon"}}</button>{{end}}
+      </span>
+    </form>
+    {{end}}
+    {{if $m.Description}}<p class="description">{{$m.Description}}</p>{{end}}
+    {{if $m.Tags}}<div class="tags">{{range $m.Tags}}<span>{{.}}</span>{{end}}</div>{{end}}
+  </div>
+</div>
+
+<div class="head chapters-head">
+  <h2>Chapters</h2>
+  <div class="filters">
+    <form method="get" action="/manga/{{$m.ID}}">
+      <select name="lang" data-autosubmit aria-label="Language">
+        <option value="">All languages ({{$m.Downloaded}} of {{$m.Known}} downloaded)</option>
+        {{range $d.Langs}}<option value="{{.Code}}"{{if eq .Code $d.Filter}} selected{{end}}>{{lang .Code}} ({{.Downloaded}} of {{.Chapters}} downloaded)</option>{{end}}
+      </select>
+      <noscript><button class="small secondary">Show</button></noscript>
+    </form>
+    <form method="post" action="/manga/{{$m.ID}}/download-all">
+      <input type="hidden" name="lang" value="{{$d.Filter}}">
+      <input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Filter}}?lang={{$d.Filter}}{{end}}">
+      <button class="secondary">{{if $d.Filter}}Download all {{lang $d.Filter}} chapters{{else}}Download all chapters{{end}}</button>
+    </form>
+  </div>
+</div>
+<div data-live{{if $d.Busy}} data-busy{{end}}>
+{{if $d.Chapters}}
+<table class="list compact">
+  <thead><tr><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th>Published</th><th class="num">Pages</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Chapters}}
+  <tr class="state{{.State}}">
+    <td class="nowrap">{{chapterLabel .}}</td>
+    <td>{{.Title}}</td>
+    <td>{{lang .Lang}}</td>
+    <td>{{.Group}}</td>
+    <td class="nowrap">{{date .Published}}</td>
+    <td class="num">{{.Pages}}</td>
+    <td class="nowrap">
+      {{if and $d.Current (eq $d.Current.ChapterID .ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
+      {{else if eq .State 2}}<span title="{{date .Downloaded}}">Downloaded</span>
+      {{else if eq .State 1}}<span class="pill">Queued</span>
+      {{else if eq .State 3}}<span class="pill bad" title="{{.Error}}">Failed</span>
+      {{else}}<span class="muted">Not downloaded</span>{{end}}
+    </td>
+    <td class="actions">
+      {{if eq .State 2}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
+      {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><button class="small link">Cancel</button></form>
+      {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Retry</button></form>
+      {{else}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Download</button></form>{{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty">{{if not $m.Checked}}Fetching the chapter list.{{else if $d.Filter}}No chapters in {{lang $d.Filter}}.{{else}}MangaDex has no chapters for this manga.{{end}}</p>
+{{end}}
+</div>
+{{end}}

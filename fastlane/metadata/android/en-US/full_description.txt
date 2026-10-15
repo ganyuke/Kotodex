@@ -1,0 +1,14 @@
+Kotodex adds your Kotodex server as a manga source in Kotatsu. The server follows manga on MangaDex and downloads new chapters, and this app lets Kotatsu read them.
+
+Sign in with your server address, username, and password. Kotodex then shows up pinned at the top of Explore in Kotatsu.
+
+<b>Features</b>
+<ul>
+<li>Favorites, history, and new chapter notifications in Kotatsu, like any other source</li>
+<li>Each language as its own branch</li>
+<li>The whole server library, or only manga you follow</li>
+<li>Only Kotatsu can read your library, unless you allow another app</li>
+<li>Colors that follow your wallpaper on Android 12 and later</li>
+</ul>
+
+You need a Kotodex server and Kotatsu. The server is in the same repository.

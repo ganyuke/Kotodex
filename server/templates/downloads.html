@@ -1,0 +1,97 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1>Downloads</h1>
+  <div class="buttons">
+    <form method="post" action="/downloads/check"><button class="secondary">Check for new chapters</button></form>
+    {{if $d.Failed}}<form method="post" action="/downloads/retry"><button class="secondary">Retry failed</button></form>{{end}}
+  </div>
+</div>
+<div data-live{{if $d.Busy}} data-busy{{end}}>
+<div class="split">
+  <div>
+    <section class="card now">
+      {{with $d.Status.Current}}
+      <div class="now-head">
+        <div><a class="title" href="/manga/{{.MangaID}}">{{.MangaTitle}}</a> <span class="muted">{{.Label}}</span></div>
+        <div class="muted">{{.Done}} of {{.Total}} pages · {{size .Bytes}}</div>
+      </div>
+      <progress class="bar" max="{{.Total}}" value="{{.Done}}">{{percent .Done .Total}}%</progress>
+      {{else}}
+      <p class="muted idle">Nothing downloading.</p>
+      {{end}}
+    </section>
+
+    <h2>Queue{{if $d.Queue}} <span class="count">{{len $d.Queue}}</span>{{end}}</h2>
+    {{if $d.Queue}}
+    <table class="list compact">
+      <thead><tr><th>Manga</th><th>Chapter</th><th>Language</th><th>Group</th><th>Published</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {{range $d.Queue}}
+      <tr>
+        <td><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
+        <td class="nowrap">{{chapterLabel .}}</td>
+        <td>{{lang .Lang}}</td>
+        <td>{{.Group}}</td>
+        <td class="nowrap">{{date .Published}}</td>
+        <td>
+          {{if and $d.Status.Current (eq $d.Status.Current.ChapterID .ID)}}<span class="pill active">Downloading</span>
+          {{else if eq .State 3}}<span class="pill bad">Failed</span> <span class="muted">{{.Error}}</span>
+          {{else if .Error}}<span class="pill">Retrying</span> <span class="muted">{{.Error}}</span>
+          {{else}}<span class="pill">Queued</span>{{end}}
+        </td>
+        <td class="actions">
+          {{if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/downloads"><button class="small link">Retry</button></form>{{end}}
+          <form method="post" action="/chapter/{{.ID}}/cancel"><input type="hidden" name="next" value="/downloads"><button class="small link">Cancel</button></form>
+        </td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="empty small">Nothing waiting to download.</p>
+    {{end}}
+  </div>
+
+  <aside class="card">
+    <dl class="facts">
+      <dt>Checking</dt><dd>{{if $d.Status.Checking}}{{$d.Status.Checking}}{{else}}<span class="muted">Idle</span>{{end}}</dd>
+      <dt>Last check</dt><dd>{{ago $d.LastCheck}}</dd>
+      <dt>Next check</dt><dd>{{until $d.NextCheck}}</dd>
+      <dt>Queued</dt><dd>{{$d.Queued}}</dd>
+      <dt>Failed</dt><dd>{{if $d.Failed}}<span class="bad">{{$d.Failed}}</span>{{else}}0{{end}}</dd>
+      <dt>Downloaded</dt><dd>{{$d.TotalChapters}} chapters</dd>
+      <dt>Disk space</dt><dd>{{size $d.TotalSize}}</dd>
+    </dl>
+  </aside>
+</div>
+
+<h2>History</h2>
+{{if $d.History}}
+<table class="list compact">
+  <thead><tr><th>Downloaded</th><th>Manga</th><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th class="num">Pages</th><th class="num">Size</th></tr></thead>
+  <tbody>
+  {{range $d.History}}
+  <tr>
+    <td class="nowrap" title="{{date .Downloaded}}">{{ago .Downloaded}}</td>
+    <td><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
+    <td class="nowrap">{{chapterLabel .}}</td>
+    <td>{{.Title}}</td>
+    <td>{{lang .Lang}}</td>
+    <td>{{.Group}}</td>
+    <td class="num">{{.Pages}}</td>
+    <td class="num nowrap">{{size .Size}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+<div class="pager">
+  {{if gt $d.Page 1}}<a href="/downloads?page={{add $d.Page -1}}">Newer</a>{{end}}
+  <span class="muted">Page {{$d.Page}}</span>
+  {{if $d.HasOlder}}<a href="/downloads?page={{add $d.Page 1}}">Older</a>{{end}}
+</div>
+{{else}}
+<p class="empty small">Nothing downloaded yet.</p>
+{{end}}
+</div>
+{{end}}

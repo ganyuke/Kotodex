@@ -1,0 +1,9 @@
+{{define "content"}}
+<form class="login card" method="post" action="/login">
+  <h1>Kotodex</h1>
+  <input type="hidden" name="next" value="{{.Data}}">
+  <label>Username<input name="username" autocomplete="username" autofocus required></label>
+  <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Sign in</button>
+</form>
+{{end}}

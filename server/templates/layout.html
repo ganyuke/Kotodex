@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - Kotodex</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+{{if .User}}
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/">Kotodex</a>
+    <nav>
+      <a href="/"{{if eq .Nav "library"}} class="on"{{end}}>Library</a>
+      <a href="/downloads"{{if eq .Nav "downloads"}} class="on"{{end}}>Downloads</a>
+      <a href="/settings"{{if eq .Nav "settings"}} class="on"{{end}}>Settings</a>
+    </nav>
+    <form class="search" action="/search" method="get" role="search">
+      <input type="search" name="q" value="{{.Search}}" placeholder="Search MangaDex or paste a link" aria-label="Search MangaDex">
+    </form>
+    <form action="/logout" method="post" class="signout">
+      <span class="who">{{.User.Name}}</span>
+      <button class="link" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+{{end}}
+<main{{if not .User}} class="narrow"{{end}}>
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{template "content" .}}
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
+{{define "reseticon"}}<svg class="icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6 0 2.97-2.17 5.43-5 5.91v2.02c3.95-.49 7-3.85 7-7.93 0-4.42-3.58-8-8-8zm-6 8c0-1.65.67-3.15 1.76-4.24L6.34 7.34C4.9 8.79 4 10.79 4 13c0 4.08 3.05 7.44 7 7.93v-2.02c-2.83-.48-5-2.94-5-5.91z"/></svg>{{end}}

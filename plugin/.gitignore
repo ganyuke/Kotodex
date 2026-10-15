@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+.kotlin/
+
+# Signing keys and their passwords
+keystore.properties
+*.p12
+
+# Built APKs copied out for installing
+*.apk

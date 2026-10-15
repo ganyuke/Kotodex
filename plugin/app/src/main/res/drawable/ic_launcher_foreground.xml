@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A kotatsu table seen from the side: tabletop over a blanket with legs. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,40h48a3,3 0,0 1,3 3v2a3,3 0,0 1,-3 3H30a3,3 0,0 1,-3 -3v-2a3,3 0,0 1,3 -3z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M33,51h42l4,16a3,3 0,0 1,-3 3.6H32a3,3 0,0 1,-3 -3.6z" />
+</vector>

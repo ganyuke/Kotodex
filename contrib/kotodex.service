@@ -1,0 +1,33 @@
+[Unit]
+Description=Kotodex manga server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# Run as a throwaway user with its own state directory under /var/lib/kotodex
+DynamicUser=yes
+StateDirectory=kotodex
+Environment=KOTODEX_DATA_DIR=/var/lib/kotodex
+Environment=KOTODEX_LISTEN=:8080
+# Set the first admin password (only used when no users exist yet)
+#Environment=KOTODEX_ADMIN_PASSWORD=change-me
+ExecStart=/usr/local/bin/kotodex
+Restart=on-failure
+
+# Lock down everything except the state directory
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

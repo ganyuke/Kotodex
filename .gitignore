@@ -1,0 +1,6 @@
+server/data/
+server/kotodex
+*.apk
+
+# Old screenshots kept locally, not used anywhere
+unused-screenshots/

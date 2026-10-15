@@ -1,0 +1,461 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func testServer(t *testing.T) (*Server, *httptest.Server) {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	mangaDir := filepath.Join(dir, "manga")
+	mdx := newMangaDex("Kotodex-test")
+	keys, err := loadKeys(filepath.Join(dir, keyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		db: db, mdx: mdx, dl: newDownloader(db, mdx, keys, mangaDir), keys: keys,
+		mangaDir: mangaDir, limiter: &loginLimiter{fails: map[string][]time.Time{}},
+	}
+	s.loadTemplates()
+	ts := httptest.NewServer(s.routes())
+	t.Cleanup(ts.Close)
+	return s, ts
+}
+
+const (
+	mangaA   = "6f2b317e-17ff-491a-8f61-e6e591ae2df2"
+	chapter1 = "18ccd96c-23de-4ba8-a6dc-fed34697d2ab"
+	chapter2 = "28ccd96c-23de-4ba8-a6dc-fed34697d2ab"
+)
+
+func seed(t *testing.T, s *Server) int64 {
+	t.Helper()
+	uid, err := s.db.createUser("mio", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.upsertManga(&Manga{ID: mangaA, Title: "Akanabe", Tags: []string{"Comedy"}, Cover: "x.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	s.db.setFollow(uid, mangaA, true)
+	s.db.insertChapter(&Chapter{ID: chapter1, MangaID: mangaA, Number: "10", Lang: "en", Published: 100})
+	s.db.insertChapter(&Chapter{ID: chapter2, MangaID: mangaA, Number: "9.5", Lang: "en", Published: 200})
+	os.MkdirAll(filepath.Join(s.mangaDir, mangaA, chapter1), 0o755)
+	os.WriteFile(filepath.Join(s.mangaDir, mangaA, chapter1, "001.jpg"), []byte("page"), 0o644)
+	s.db.Exec(`UPDATE chapters SET state=2, files='["001.jpg"]' WHERE id=?`, chapter1)
+	return uid
+}
+
+func TestAPIFlow(t *testing.T) {
+	s, ts := testServer(t)
+	seed(t, s)
+
+	res, err := http.Post(ts.URL+"/api/v1/login", "application/json", strings.NewReader(`{"username":"mio","password":"nope"}`))
+	if err != nil || res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong password: got %v %v", res.StatusCode, err)
+	}
+	res, _ = http.Post(ts.URL+"/api/v1/login", "application/json", strings.NewReader(`{"username":"Mio","password":"pw"}`))
+	var login struct{ Token string }
+	json.NewDecoder(res.Body).Decode(&login)
+	if login.Token == "" {
+		t.Fatal("no token")
+	}
+
+	get := func(path string, out any) int {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+login.Token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if out != nil {
+			json.NewDecoder(res.Body).Decode(out)
+		}
+		return res.StatusCode
+	}
+
+	var list []apiManga
+	get("/api/v1/manga?tag=Comedy", &list)
+	if len(list) != 1 || list[0].Chapters != 1 {
+		t.Fatalf("list: %+v", list)
+	}
+	get("/api/v1/manga?tag=Horror", &list)
+	if len(list) != 0 {
+		t.Fatalf("tag filter: %+v", list)
+	}
+
+	var detail struct{ ChapterList []apiChapter }
+	get("/api/v1/manga/"+mangaA, &detail)
+	if len(detail.ChapterList) != 1 || detail.ChapterList[0].ID != chapter1 {
+		t.Fatalf("only downloaded chapters should be listed: %+v", detail.ChapterList)
+	}
+
+	var pages []string
+	get("/api/v1/chapters/"+chapter1+"/pages", &pages)
+	if len(pages) != 1 {
+		t.Fatalf("pages: %v", pages)
+	}
+	res, _ = http.Get(ts.URL + pages[0])
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("signed page: %d", res.StatusCode)
+	}
+	if code := get("/api/v1/chapters/"+chapter2+"/pages", nil); code != http.StatusNotFound {
+		t.Fatalf("pages of a chapter that isn't downloaded: %d", code)
+	}
+
+	// Changing the password revokes the session and every signed link.
+	var uid int64
+	s.db.QueryRow(`SELECT id FROM users WHERE name='mio'`).Scan(&uid)
+	s.db.setPassword(uid, "new")
+	if code := get("/api/v1/me", nil); code != http.StatusUnauthorized {
+		t.Fatalf("session after password change: %d", code)
+	}
+	res, _ = http.Get(ts.URL + pages[0])
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("old signed link: %d", res.StatusCode)
+	}
+}
+
+func TestSignOutRevokesLinks(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	phone, _ := s.db.createSession(uid, "kotatsu", "phone")
+	tablet, _ := s.db.createSession(uid, "kotatsu", "tablet")
+	link := func(token string) string {
+		u, err := s.db.sessionUser(token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ts.URL + s.fileURL(u, mangaA+"/"+chapter1+"/001.jpg")
+	}
+	phoneLink, tabletLink := link(phone), link(tablet)
+	if phoneLink == tabletLink {
+		t.Fatal("each session should get its own links")
+	}
+	s.db.deleteSession(phone)
+	if res, _ := http.Get(phoneLink); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("signed-out device's link: %d", res.StatusCode)
+	}
+	if res, _ := http.Get(tabletLink); res.StatusCode != http.StatusOK {
+		t.Fatalf("other device's link: %d", res.StatusCode)
+	}
+	// A valid session ID with a signature for a different file is refused.
+	forged := strings.Replace(tabletLink, "001.jpg", "002.jpg", 1)
+	if res, _ := http.Get(forged); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("forged link: %d", res.StatusCode)
+	}
+}
+
+func TestChapterOrderAndDuplicates(t *testing.T) {
+	s, _ := testServer(t)
+	seed(t, s)
+	list, _ := s.db.chapters(mangaA)
+	if list[0].Number != "9.5" || list[1].Number != "10" {
+		t.Fatalf("order: %s, %s", list[0].Number, list[1].Number)
+	}
+	if !s.db.hasChapterNumber(mangaA, "en", "", "10") {
+		t.Fatal("chapter 10 is downloaded")
+	}
+	if s.db.hasChapterNumber(mangaA, "en", "", "9.5") {
+		t.Fatal("chapter 9.5 is only known, not downloaded or queued")
+	}
+	if s.db.hasChapterNumber(mangaA, "es", "", "10") {
+		t.Fatal("other languages don't count")
+	}
+}
+
+func TestWebRequiresSignIn(t *testing.T) {
+	_, ts := testServer(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, _ := client.Get(ts.URL + "/settings")
+	if res.StatusCode != http.StatusSeeOther || !strings.HasPrefix(res.Header.Get("Location"), "/login") {
+		t.Fatalf("got %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+func TestCrossSitePostBlocked(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	req, _ := http.NewRequest("POST", ts.URL+"/unfollow", strings.NewReader("id="+mangaA))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, _ := http.DefaultClient.Do(req)
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("got %d", res.StatusCode)
+	}
+}
+
+func TestImagePathValidation(t *testing.T) {
+	good := []string{mangaA + "/cover.jpg", mangaA + "/thumb.jpg", mangaA + "/" + chapter1 + "/001.png"}
+	bad := []string{"../kotodex.db", mangaA + "/../x", mangaA + "/" + chapter1 + "/../../kotodex.db", mangaA + "/.cover"}
+	for _, p := range good {
+		if !filePathRe.MatchString(p) {
+			t.Errorf("should accept %s", p)
+		}
+	}
+	for _, p := range bad {
+		if filePathRe.MatchString(p) {
+			t.Errorf("should reject %s", p)
+		}
+	}
+}
+
+func TestMangaIDFrom(t *testing.T) {
+	cases := map[string]string{
+		"https://mangadex.org/title/" + mangaA + "/akanabe-sensei": mangaA,
+		strings.ToUpper(mangaA): mangaA,
+		"akanabe":               "",
+	}
+	for in, want := range cases {
+		if got := mangaIDFrom(in); got != want {
+			t.Errorf("%s: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIdleSessionsExpire(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "kotatsu", "old phone")
+	u, _ := s.db.sessionUser(token)
+	link := ts.URL + s.fileURL(u, mangaA+"/"+chapter1+"/001.jpg")
+	if res, _ := http.Get(link); res.StatusCode != http.StatusOK {
+		t.Fatalf("fresh link: %d", res.StatusCode)
+	}
+
+	s.db.Exec(`UPDATE sessions SET used=? WHERE hash=?`, time.Now().Add(-91*24*time.Hour).Unix(), hashToken(token))
+	if res, _ := http.Get(link); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("link from an idle session: %d", res.StatusCode)
+	}
+	if _, err := s.db.sessionUser(token); err == nil {
+		t.Fatal("idle session should be refused")
+	}
+	var n int
+	s.db.QueryRow(`SELECT count(*) FROM sessions WHERE hash=?`, hashToken(token)).Scan(&n)
+	if n != 0 {
+		t.Fatal("idle session should be deleted")
+	}
+
+	// Used 89 days ago is still fine.
+	recent, _ := s.db.createSession(uid, "kotatsu", "tablet")
+	s.db.Exec(`UPDATE sessions SET used=? WHERE hash=?`, time.Now().Add(-89*24*time.Hour).Unix(), hashToken(recent))
+	s.db.deleteIdleSessions()
+	if _, err := s.db.sessionUser(recent); err != nil {
+		t.Fatalf("recent session: %v", err)
+	}
+}
+
+func TestForwardedForCantBeSpoofed(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "172.17.0.1:5000" // reverse proxy on a Docker network
+	r.Header.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.9")
+	if got := clientIP(r); got != "203.0.113.9" {
+		t.Fatalf("should use the entry the proxy added, got %s", got)
+	}
+	r.RemoteAddr = "198.51.100.7:5000" // straight from the internet
+	if got := clientIP(r); got != "198.51.100.7" {
+		t.Fatalf("should ignore the header from a public address, got %s", got)
+	}
+}
+
+func TestLoginLimitPerAccount(t *testing.T) {
+	s, ts := testServer(t)
+	seed(t, s)
+	try := func(ip, pass string) int {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/login", strings.NewReader(`{"username":"mio","password":"`+pass+`"}`))
+		req.Header.Set("X-Forwarded-For", ip) // the test client connects from loopback
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode
+	}
+	for i := 0; i < 10; i++ {
+		try(fmt.Sprintf("10.0.0.%d", i), "wrong")
+	}
+	if code := try("10.0.1.1", "pw"); code != http.StatusTooManyRequests {
+		t.Fatalf("guesses from many addresses should still lock the account for a while, got %d", code)
+	}
+}
+
+func TestLocalPath(t *testing.T) {
+	for _, p := range []string{"/manga/x", "/downloads?page=2"} {
+		if !localPath(p) {
+			t.Errorf("should allow %s", p)
+		}
+	}
+	for _, p := range []string{"", "https://evil.example", "//evil.example", "/\\evil.example", "/\\/evil.example"} {
+		if localPath(p) {
+			t.Errorf("should refuse %s", p)
+		}
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	s, _ := testServer(t)
+	ts := httptest.NewServer(securityHeaders(s.routes()))
+	defer ts.Close()
+	res, _ := http.Get(ts.URL + "/login")
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
+		t.Fatalf("CSP: %q", csp)
+	}
+	if res.Header.Get("X-Content-Type-Options") != "nosniff" || res.Header.Get("X-Frame-Options") != "DENY" {
+		t.Fatal("missing headers")
+	}
+}
+
+func TestKeyFile(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), keyFileName)
+	keys, err := loadKeys(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(keyPath); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("key file: %v %v", st, err)
+	}
+	sealed := keys.seal("client-secret")
+	if strings.Contains(sealed, "client-secret") {
+		t.Fatal("not encrypted")
+	}
+	again, _ := loadKeys(keyPath)
+	if got, err := again.open(sealed); err != nil || got != "client-secret" {
+		t.Fatalf("same key after restart: %q %v", got, err)
+	}
+
+	// A database copied without the key can't be read.
+	os.Remove(keyPath)
+	other, _ := loadKeys(keyPath)
+	if _, err := other.open(sealed); err == nil {
+		t.Fatal("a different key should not decrypt")
+	}
+
+	t.Setenv("KOTODEX_SECRET", "short")
+	if _, err := loadKeys(keyPath); err == nil {
+		t.Fatal("short KOTODEX_SECRET should be refused")
+	}
+}
+
+func TestFollowLanguages(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s) // follows mangaA, user default "en"
+	other, _ := s.db.createUser("rin", "pw", false)
+	s.db.Exec(`UPDATE users SET langs='es-la,pt-br' WHERE id=?`, other)
+	s.db.setFollow(other, mangaA, true)
+
+	if langs, custom := s.db.followLangs(other, mangaA); strings.Join(langs, ",") != "es-la,pt-br" || custom {
+		t.Fatalf("a new follow uses the defaults: %v %v", langs, custom)
+	}
+	want := s.db.wantedLangs(mangaA)
+	if !want["en"] || !want["es-la"] || !want["pt-br"] || len(want) != 3 {
+		t.Fatalf("wanted: %v", want)
+	}
+
+	// Changing the defaults reaches follows that use them.
+	s.db.Exec(`UPDATE users SET langs='fr' WHERE id=?`, other)
+	if langs, _ := s.db.followLangs(other, mangaA); strings.Join(langs, ",") != "fr" {
+		t.Fatalf("defaults should apply live: %v", langs)
+	}
+
+	// Languages set for one manga override the defaults.
+	s.db.setFollowLangs(other, mangaA, []string{"ja", "ko"})
+	s.db.Exec(`UPDATE users SET langs='de' WHERE id=?`, other)
+	if langs, custom := s.db.followLangs(other, mangaA); strings.Join(langs, ",") != "ja,ko" || !custom {
+		t.Fatalf("override: %v %v", langs, custom)
+	}
+
+	// Picking exactly the defaults is the same as resetting.
+	s.db.setFollowLangs(other, mangaA, []string{"de"})
+	if _, custom := s.db.followLangs(other, mangaA); custom {
+		t.Fatal("choosing the defaults should not count as an override")
+	}
+
+	s.db.setFollow(uid, mangaA, false)
+	if s.db.wantedLangs(mangaA)["en"] {
+		t.Fatal("en should no longer be wanted")
+	}
+}
+
+func TestFollowsDefaultToMangaDex(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s) // followed mangaA in Kotodex, no MangaDex account yet
+	const b, c = "b0000000-0000-0000-0000-000000000000", "c0000000-0000-0000-0000-000000000000"
+	following := func(id string) bool {
+		var v bool
+		s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND manga_id=?)`, uid, id).Scan(&v)
+		return v
+	}
+	mdx := func(ids ...string) {
+		var list []*Manga
+		for _, id := range ids {
+			list = append(list, &Manga{ID: id, Title: id})
+		}
+		if err := s.db.setMangaDexFollows(uid, list); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mdx(b, c)
+	if !following(b) || !following(c) || !following(mangaA) {
+		t.Fatal("MangaDex follows are imported, and the follow made here stays")
+	}
+	if !s.db.followChoice(uid, mangaA) || s.db.followChoice(uid, b) {
+		t.Fatal("only the follow made here differs from MangaDex")
+	}
+
+	// Unfollowing here is a choice that wins over MangaDex, and survives imports.
+	s.db.setFollow(uid, b, false)
+	mdx(b, c)
+	if following(b) || !s.db.followChoice(uid, b) {
+		t.Fatal("unfollowed here should stay unfollowed")
+	}
+
+	// Resetting matches MangaDex again.
+	s.db.resetFollow(uid, b)
+	if !following(b) || s.db.followChoice(uid, b) {
+		t.Fatal("reset should follow again, like on MangaDex")
+	}
+
+	// Following here what MangaDex already follows is no choice at all.
+	s.db.setFollow(uid, c, true)
+	if s.db.followChoice(uid, c) {
+		t.Fatal("same as MangaDex should not be a choice")
+	}
+
+	// Unfollowed on MangaDex: c goes, mangaA (chosen here) stays.
+	mdx(b)
+	if following(c) || !following(mangaA) {
+		t.Fatal("unfollowing on MangaDex should only affect follows without a choice")
+	}
+
+	// Unlinking and keeping the imported follows turns them into choices.
+	s.db.Exec(`INSERT INTO mdx_accounts(user_id,username,client_id,client_secret,refresh) VALUES(?,?,?,?,?)`, uid, "mio", "x", "x", "x")
+	s.db.setFollow(uid, c, false) // c isn't on MangaDex, so this is no choice
+	if err := s.db.unlinkMangaDex(uid, true); err != nil {
+		t.Fatal(err)
+	}
+	if !following(b) || !following(mangaA) || following(c) {
+		t.Fatal("keep should leave everything followed as it was")
+	}
+	var n int
+	s.db.QueryRow(`SELECT count(*) FROM follow_choices WHERE user_id=? AND following=0`, uid).Scan(&n)
+	if n != 0 {
+		t.Fatal("unfollow choices mean nothing without MangaDex")
+	}
+}

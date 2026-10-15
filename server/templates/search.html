@@ -1,0 +1,32 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head"><h1>Search MangaDex</h1></div>
+{{if $d.Rows}}
+<table class="list">
+  <thead><tr><th class="thumbcol"></th><th>Title</th><th>Status</th><th>Year</th><th>Rating</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Rows}}
+  <tr>
+    <td class="thumbcol">{{if .Cover}}<img class="thumb" src="{{.Cover}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<span class="thumb"></span>{{end}}</td>
+    <td><a class="title" href="https://mangadex.org/title/{{.ID}}" target="_blank" rel="noopener">{{.Title}}</a>{{if .Authors}}<div class="muted">{{join .Authors ", "}}</div>{{end}}
+      {{if .Tags}}<div class="tags">{{range .Tags}}<span>{{.}}</span>{{end}}</div>{{end}}</td>
+    <td>{{title .Status}}</td>
+    <td>{{if .Year}}{{.Year}}{{end}}</td>
+    <td>{{title .Rating}}</td>
+    <td class="actions">
+      {{if .Following}}
+      <a class="button small secondary" href="/manga/{{.ID}}">Following</a>
+      {{else}}
+      <form method="post" action="/follow"><input type="hidden" name="id" value="{{.ID}}"><button class="small">Follow</button></form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else if $d.Query}}
+<p class="empty">No results on MangaDex.</p>
+{{else}}
+<p class="empty">Type a title in the search box at the top, or paste a MangaDex link.</p>
+{{end}}
+{{end}}

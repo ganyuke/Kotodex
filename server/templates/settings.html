@@ -1,0 +1,131 @@
+{{define "content"}}
+{{$d := .Data}}{{$me := .User}}
+<div class="head"><h1>Settings</h1></div>
+<div class="columns">
+<div>
+  <section class="card">
+    <h2>Kotatsu</h2>
+    <dl class="facts">
+      <dt>Server address</dt><dd><code>{{$d.Address}}</code></dd>
+      <dt>Username</dt><dd><code>{{$me.Name}}</code></dd>
+    </dl>
+    <ol class="steps">
+      <li>Install the Kotodex plugin APK on the phone that has Kotatsu.</li>
+      <li>Open Kotodex and sign in with the server address, your username, and your password.</li>
+      <li>In Kotatsu, open Explore. Kotodex is pinned at the top.</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>Signed-in devices (<abbr title="Kotodex signs out devices that go unused for 90 days.">?</abbr>)</h2>
+    <table class="list compact">
+      <thead><tr><th>Device</th><th>Type</th><th>Last used</th><th></th></tr></thead>
+      <tbody>
+      {{range $d.Sessions}}
+      <tr>
+        <td class="agent" title="{{.Agent}}">{{.Agent}}</td>
+        <td>{{if eq .Kind "kotatsu"}}Kotatsu{{else}}Browser{{end}}</td>
+        <td class="nowrap">{{if .Current}}This browser{{else}}{{ago .Used}}{{end}}</td>
+        <td class="actions">{{if not .Current}}<form method="post" action="/settings/sign-out"><input type="hidden" name="hash" value="{{.Hash}}"><button class="small link">Sign out</button></form>{{end}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Password</h2>
+    <form method="post" action="/settings/password" class="stack">
+      <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+      <label>New password<input type="password" name="new" autocomplete="new-password" required></label>
+      <label>Confirm new password<input type="password" name="confirm" autocomplete="new-password" required></label>
+      <p class="muted">Changing your password signs out your other devices, including Kotatsu.</p>
+      <button type="submit">Change password</button>
+    </form>
+  </section>
+</div>
+
+<div>
+  <section class="card">
+    <h2>MangaDex account</h2>
+    {{with $d.MangaDex}}
+    {{if .Linked}}
+    <dl class="facts">
+      <dt>Account</dt><dd>{{.Username}}</dd>
+      <dt>Follows imported</dt><dd>{{.Follows}}</dd>
+      <dt>Last import</dt><dd>{{ago .Synced}}</dd>
+      {{if .Error}}<dt>Problem</dt><dd class="bad">{{.Error}}</dd>{{end}}
+    </dl>
+    <p class="muted">Kotodex imports your MangaDex follows at every check. Unfollowing on MangaDex unfollows here too. Kotodex never changes your follows on MangaDex.</p>
+    <form method="post" action="/settings/mangadex/unlink" class="row" data-confirm="Unlink your MangaDex account?">
+      <label class="check"><input type="checkbox" name="keep" value="1" checked> Keep following the imported manga</label>
+      <button class="secondary">Unlink</button>
+    </form>
+    {{else}}
+    <p class="muted">Link your account to follow everything you follow on MangaDex.</p>
+    <form method="post" action="/settings/mangadex" class="stack">
+      <label>MangaDex username<input name="username" autocomplete="off" required></label>
+      <label>MangaDex password<input type="password" name="password" autocomplete="off" required></label>
+      <label><span>Client ID (<abbr title="Create a personal client on mangadex.org under Settings, API Clients. It needs to be approved before it works.">?</abbr>)</span><input name="client_id" autocomplete="off" required></label>
+      <label>Client secret<input type="password" name="client_secret" autocomplete="off" required></label>
+      <button type="submit">Link account</button>
+    </form>
+    {{end}}
+    {{end}}
+  </section>
+
+  <section class="card">
+    <h2>Languages</h2>
+    <form method="post" action="/settings/languages" class="stack wide">
+      <p class="muted">Languages for the manga you follow. Change them for one manga on the manga's page.</p>
+      <div class="langgrid">
+        {{range $d.AllLangs}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.MyLangs .Code}} checked{{end}}> {{.Name}}</label>{{end}}
+      </div>
+      <button type="submit">Save</button>
+    </form>
+  </section>
+
+  {{if $me.Admin}}
+  <section class="card">
+    <h2>Downloads</h2>
+    <form method="post" action="/settings/server" class="stack">
+      <label>Check every (minutes)<input type="number" name="interval" min="10" value="{{$d.Interval}}" required></label>
+      <label class="check"><input type="checkbox" name="data_saver" value="1"{{if $d.DataSaver}} checked{{end}}> Download smaller, compressed pages</label>
+      <fieldset>
+        <legend>Show in search</legend>
+        <label class="check"><input type="checkbox" name="rating" value="safe"{{if index $d.Ratings "safe"}} checked{{end}}> Safe</label>
+        <label class="check"><input type="checkbox" name="rating" value="suggestive"{{if index $d.Ratings "suggestive"}} checked{{end}}> Suggestive</label>
+        <label class="check"><input type="checkbox" name="rating" value="erotica"{{if index $d.Ratings "erotica"}} checked{{end}}> Erotica</label>
+        <label class="check"><input type="checkbox" name="rating" value="pornographic"{{if index $d.Ratings "pornographic"}} checked{{end}}> Pornographic</label>
+      </fieldset>
+      <button type="submit">Save</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Users</h2>
+    <table class="list compact">
+      <thead><tr><th>Name</th><th>Role</th><th>New password</th><th></th></tr></thead>
+      <tbody>
+      {{range $d.Users}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td>{{if .Admin}}Admin{{else}}User{{end}}</td>
+        <td><form method="post" action="/settings/users/{{.ID}}/password" class="inline"><input type="password" name="password" autocomplete="new-password" required aria-label="New password for {{.Name}}"><button class="small secondary">Set</button></form></td>
+        <td class="actions">{{if ne .ID $me.ID}}<form method="post" action="/settings/users/{{.ID}}/delete" data-confirm="Delete {{.Name}}?"><button class="small link danger">Delete</button></form>{{end}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+    <h3>Add user</h3>
+    <form method="post" action="/settings/users" class="stack">
+      <label>Username<input name="username" autocomplete="off" required></label>
+      <label>Password<input type="password" name="password" autocomplete="new-password" required></label>
+      <label class="check"><input type="checkbox" name="admin" value="1"> Admin</label>
+      <button type="submit">Add user</button>
+    </form>
+  </section>
+  {{end}}
+</div>
+</div>
+{{end}}

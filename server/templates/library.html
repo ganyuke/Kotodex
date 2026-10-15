@@ -1,0 +1,50 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1>Library</h1>
+  <form class="filters" method="get" action="/">
+    <div class="seg">
+      <a href="/?sort={{$d.Sort}}"{{if ne $d.Show "all"}} class="on"{{end}}>Following</a>
+      <a href="/?show=all&amp;sort={{$d.Sort}}"{{if eq $d.Show "all"}} class="on"{{end}}>Everyone's</a>
+    </div>
+    {{if eq $d.Show "all"}}<input type="hidden" name="show" value="all">{{end}}
+    <input type="search" name="q" value="{{$d.Query}}" placeholder="Filter">
+    <select name="sort" data-autosubmit aria-label="Sort">
+      <option value="">Recently updated</option>
+      <option value="title"{{if eq $d.Sort "title"}} selected{{end}}>Title</option>
+      <option value="added"{{if eq $d.Sort "added"}} selected{{end}}>Recently added</option>
+    </select>
+  </form>
+</div>
+{{if $d.Rows}}
+<table class="list">
+  <thead><tr><th class="thumbcol"></th><th>Title</th><th>Status</th><th class="num">Downloaded</th><th class="num">Queued</th><th>Last download</th><th class="num">Followers</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Rows}}
+  <tr>
+    <td class="thumbcol"><a href="/manga/{{.ID}}">{{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy">{{else}}<span class="thumb"></span>{{end}}</a></td>
+    <td><a href="/manga/{{.ID}}" class="title">{{.Title}}</a>{{if .Authors}}<div class="muted">{{join .Authors ", "}}</div>{{end}}</td>
+    <td>{{title .Status}}</td>
+    <td class="num">{{.Downloaded}} / {{.Known}}</td>
+    <td class="num">{{if .Queued}}{{.Queued}}{{end}}</td>
+    <td>{{if .Latest}}{{ago .Latest}}{{end}}</td>
+    <td class="num">{{.Followers}}</td>
+    <td class="actions">
+      {{if .Following}}
+      <form method="post" action="/unfollow"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="next" value="/?show={{$d.Show}}"><button class="small secondary">Unfollow</button></form>
+      {{else}}
+      <form method="post" action="/follow"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="next" value="/?show={{$d.Show}}"><button class="small">Follow</button></form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else if $d.Query}}
+<p class="empty">No matches.</p>
+{{else if ne $d.Show "all"}}
+<p class="empty">You aren't following anything yet. Search MangaDex at the top to find manga to follow.</p>
+{{else}}
+<p class="empty">Nothing here yet.</p>
+{{end}}
+{{end}}
