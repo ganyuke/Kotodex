@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -110,6 +111,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// After the first signal, a second one exits right away.
+	context.AfterFunc(ctx, stop)
 	go s.dl.Run(ctx)
 	go func() {
 		for {
@@ -123,8 +126,19 @@ func main() {
 	}()
 
 	addr := env("KOTODEX_LISTEN", ":8080")
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Kotodex %s listening on %s, data in %s", version, addr, dataDir)
+	if err := serve(ctx, s.httpServer(), ln); err != nil {
+		log.Fatal(err)
+	}
+	log.Print("Stopped")
+}
+
+func (s *Server) httpServer() *http.Server {
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           logRequests(securityHeaders(s.routes())),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -132,16 +146,31 @@ func main() {
 	}
 	// Live update streams never finish on their own.
 	srv.RegisterOnShutdown(func() { close(s.closing) })
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		srv.Shutdown(shutdown)
-	}()
-	log.Printf("Kotodex %s listening on %s, data in %s", version, addr, dataDir)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	return srv
+}
+
+// shutdownGrace is how long requests already running get to finish after a
+// stop signal. Form posts take milliseconds. Anything slower is cut off.
+// Nothing is lost by that: pages are written to a temporary file and
+// renamed, and every database write is a single statement.
+const shutdownGrace = 2 * time.Second
+
+// serve runs srv on ln until ctx is done. Then it stops taking connections,
+// waits up to shutdownGrace for running requests, and closes the rest.
+func serve(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
 	}
+	grace, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := srv.Shutdown(grace); err != nil {
+		srv.Close()
+	}
+	return nil
 }
 
 // securityHeaders limits what a page can load and run. Scripts and styles

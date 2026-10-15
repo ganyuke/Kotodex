@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -831,5 +832,110 @@ func TestLivePageStillPlain(t *testing.T) {
 	res.Body.Close()
 	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), "<div data-live>") {
 		t.Fatal("manga page should be a full page with its live section")
+	}
+}
+
+func TestShutdownEndsStreams(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	s.closing = make(chan struct{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, s.httpServer(), ln) }()
+
+	req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/downloads", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body := bufio.NewReader(res.Body)
+	if _, err := body.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(shutdownGrace):
+		t.Fatal("open stream held up shutdown")
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("shutdown took %v", d)
+	}
+	if _, err := io.ReadAll(body); err != nil {
+		t.Fatalf("stream didn't end cleanly: %v", err)
+	}
+}
+
+func TestShutdownGrace(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.Write([]byte("done"))
+	})
+	stuck := make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	mux.HandleFunc("/stuck", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		http.NewResponseController(w).Flush()
+		<-stuck
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, &http.Server{Handler: mux}, ln) }()
+	base := "http://" + ln.Addr().String()
+
+	stuckRes, err := http.Get(base + "/stuck")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stuckRes.Body.Close()
+	slow := make(chan string, 1)
+	go func() {
+		res, err := http.Get(base + "/slow")
+		if err != nil {
+			slow <- err.Error()
+			return
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		slow <- string(b)
+	}()
+	time.Sleep(50 * time.Millisecond) // let /slow start
+
+	start := time.Now()
+	cancel()
+	if got := <-slow; got != "done" {
+		t.Fatalf("running request was cut off: %s", got)
+	}
+	select {
+	case <-done:
+	case <-time.After(shutdownGrace + time.Second):
+		t.Fatal("stuck request kept the server up")
+	}
+	if d := time.Since(start); d < shutdownGrace-100*time.Millisecond {
+		t.Fatalf("stopped after %v, before the grace period", d)
+	}
+	if _, err := io.ReadAll(stuckRes.Body); err == nil {
+		t.Fatal("stuck request should have been cut off")
+	}
+	if _, err := http.Get(base + "/slow"); err == nil {
+		t.Fatal("still taking connections")
 	}
 }
