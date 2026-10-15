@@ -282,7 +282,7 @@ type pageData struct {
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p pageData) {
 	p.User = currentUser(r)
 	if p.Notice == "" {
-		p.Notice = r.URL.Query().Get("notice")
+		p.Notice = takeNotice(w, r)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.pages[name].Execute(w, p); err != nil {
@@ -300,19 +300,38 @@ func localPath(p string) bool {
 	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.Contains(p, "\\")
 }
 
+// back redirects after a form post. The notice goes in a one-time cookie
+// rather than the URL, so it shows once and can't be forged with a link.
 func back(w http.ResponseWriter, r *http.Request, fallback, notice string) {
 	next := r.FormValue("next")
 	if !localPath(next) {
 		next = fallback
 	}
 	if notice != "" {
-		sep := "?"
-		if strings.Contains(next, "?") {
-			sep = "&"
-		}
-		next += sep + "notice=" + url.QueryEscape(notice)
+		http.SetCookie(w, &http.Cookie{
+			Name:     noticeCookie,
+			Value:    url.QueryEscape(notice),
+			Path:     "/",
+			MaxAge:   60,
+			HttpOnly: true,
+			Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+			SameSite: http.SameSiteLaxMode,
+		})
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+const noticeCookie = "notice"
+
+// takeNotice reads the notice left by back and clears it.
+func takeNotice(w http.ResponseWriter, r *http.Request) string {
+	c, err := r.Cookie(noticeCookie)
+	if err != nil {
+		return ""
+	}
+	http.SetCookie(w, &http.Cookie{Name: noticeCookie, Path: "/", MaxAge: -1})
+	notice, _ := url.QueryUnescape(c.Value)
+	return notice
 }
 
 // Sign-in

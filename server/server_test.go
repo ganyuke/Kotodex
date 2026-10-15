@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -714,5 +716,39 @@ func TestCoverLinkLoads(t *testing.T) {
 	}
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("got %d", res.StatusCode)
+	}
+}
+
+func TestNoticeShowsOnce(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse(ts.URL)
+	jar.SetCookies(u, []*http.Cookie{{Name: sessionCookie, Value: token}})
+	client := &http.Client{Jar: jar}
+	page := func(res *http.Response) string {
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return string(b)
+	}
+
+	res, err := client.PostForm(ts.URL+"/manga/"+mangaA+"/check", url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Request.URL.RawQuery, "notice") {
+		t.Fatalf("notice in URL: %s", res.Request.URL)
+	}
+	if !strings.Contains(page(res), "Checking for new chapters.") {
+		t.Fatal("notice missing after redirect")
+	}
+	res, _ = client.Get(ts.URL + "/manga/" + mangaA)
+	if strings.Contains(page(res), "Checking for new chapters.") {
+		t.Fatal("notice shown twice")
+	}
+	res, _ = client.Get(ts.URL + "/manga/" + mangaA + "?notice=Sign+in+at+evil.example")
+	if strings.Contains(page(res), "evil.example") {
+		t.Fatal("notice taken from URL")
 	}
 }
