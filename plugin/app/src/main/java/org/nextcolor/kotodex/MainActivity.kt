@@ -36,12 +36,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onOpenKotatsu = { kotatsuIntent()?.let(::startActivity) },
                     onAllowApp = {
-                        prefs.allowedApps = prefs.allowedApps + it
-                        prefs.requestedApps = prefs.requestedApps - it
+                        prefs.allow(it)
                         refresh()
                     },
                     onRemoveApp = {
-                        prefs.allowedApps = prefs.allowedApps - it
+                        prefs.disallow(it)
                         refresh()
                     },
                 )

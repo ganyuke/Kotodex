@@ -35,5 +35,20 @@ class Prefs(context: Context) {
         get() = prefs.getStringSet("requested_apps", null).orEmpty().toSet()
         set(value) = prefs.edit().putStringSet("requested_apps", value).apply()
 
+    // Kotatsu's calls arrive on several threads while the app may change the
+    // lists too, so each change reads and writes under one lock.
+    fun request(pkg: String) = synchronized(lock) { requestedApps = requestedApps + pkg }
+
+    fun allow(pkg: String) = synchronized(lock) {
+        allowedApps = allowedApps + pkg
+        requestedApps = requestedApps - pkg
+    }
+
+    fun disallow(pkg: String) = synchronized(lock) { allowedApps = allowedApps - pkg }
+
     val signedIn: Boolean get() = server.isNotEmpty() && token.isNotEmpty()
+
+    private companion object {
+        val lock = Any()
+    }
 }

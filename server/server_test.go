@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,8 +225,9 @@ func TestImagePathValidation(t *testing.T) {
 func TestMangaIDFrom(t *testing.T) {
 	cases := map[string]string{
 		"https://mangadex.org/title/" + mangaA + "/akanabe-sensei": mangaA,
-		strings.ToUpper(mangaA): mangaA,
-		"akanabe":               "",
+		strings.ToUpper(mangaA):                mangaA,
+		"akanabe":                              "",
+		"../../../../../../../../../x-y-z-w-v": "",
 	}
 	for in, want := range cases {
 		if got := mangaIDFrom(in); got != want {
@@ -303,7 +307,7 @@ func TestLocalPath(t *testing.T) {
 			t.Errorf("should allow %s", p)
 		}
 	}
-	for _, p := range []string{"", "https://evil.example", "//evil.example", "/\\evil.example", "/\\/evil.example"} {
+	for _, p := range []string{"", "https://evil.example", "//evil.example", "/\\evil.example", "/\\/evil.example", "/\t/evil.example", "/\n/evil.example", "/\r/evil.example"} {
 		if localPath(p) {
 			t.Errorf("should refuse %s", p)
 		}
@@ -403,6 +407,10 @@ func TestFollowsDefaultToMangaDex(t *testing.T) {
 		s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND manga_id=?)`, uid, id).Scan(&v)
 		return v
 	}
+	link := func() {
+		s.db.Exec(`INSERT INTO mdx_accounts(user_id,username,client_id,client_secret,refresh) VALUES(?,'mio','c','s','r') ON CONFLICT DO NOTHING`, uid)
+	}
+	link()
 	mdx := func(ids ...string) {
 		var list []*Manga
 		for _, id := range ids {
@@ -511,5 +519,200 @@ func TestBcryptPasswordsUpgrade(t *testing.T) {
 	}
 	if _, err := s.db.sessionUser(token); err != nil {
 		t.Fatal("upgrade signed the user out")
+	}
+}
+
+// A reverse proxy that rewrites Host (nginx's default proxy_pass) must not
+// break posts from the site itself.
+func TestSameSitePostBehindProxy(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	post := func(site, origin string) int {
+		req, _ := http.NewRequest("POST", ts.URL+"/unfollow", strings.NewReader("id="+mangaA))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Sec-Fetch-Site", site)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post("same-origin", "https://manga.example"); code == http.StatusForbidden {
+		t.Fatalf("same-origin post behind proxy got %d", code)
+	}
+	if code := post("cross-site", "https://evil.example"); code != http.StatusForbidden {
+		t.Fatalf("cross-site post got %d", code)
+	}
+}
+
+func TestDuplicateUserName(t *testing.T) {
+	s, _ := testServer(t)
+	seed(t, s)
+	for _, name := range []string{"mio", "MIO", " mio "} {
+		if _, err := s.db.createUser(name, "pw", false); err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("%q: got %v", name, err)
+		}
+	}
+}
+
+func TestDuplicateUserNameRace(t *testing.T) {
+	s, _ := testServer(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.db.createUser("rin", "pw", false)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	ok := 0
+	for err := range errs {
+		if err == nil {
+			ok++
+		} else if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("got %v", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d users created", ok)
+	}
+}
+
+func TestErrorTextStaysInLog(t *testing.T) {
+	if got := userMessage(errors.New("UNIQUE constraint failed: users.name")); strings.Contains(got, "UNIQUE") {
+		t.Fatalf("database text shown: %q", got)
+	}
+	if got := userMessage(fmt.Errorf("wrapped: %w", shownError("Password is required."))); got != "wrapped: Password is required." {
+		t.Fatalf("got %q", got)
+	}
+	if got := userMessage(&url.Error{Op: "Get", URL: "https://api.mangadex.org", Err: errors.New("dial tcp: i/o timeout")}); strings.Contains(got, "dial") {
+		t.Fatalf("network text shown: %q", got)
+	}
+}
+
+func TestImportAfterUnlinkAddsNothing(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	const b = "b0000000-0000-0000-0000-000000000000"
+	s.db.Exec(`INSERT INTO mdx_accounts(user_id,username,client_id,client_secret,refresh) VALUES(?,'mio','c','s','r')`, uid)
+	// An import that fetched the list before the unlink and saves it after.
+	if err := s.db.unlinkMangaDex(uid, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.setMangaDexFollows(uid, []*Manga{{ID: b, Title: "b"}}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	s.db.QueryRow(`SELECT count(*) FROM mdx_follows WHERE user_id=?`, uid).Scan(&n)
+	var following bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND manga_id=?)`, uid, b).Scan(&following)
+	if n != 0 || following {
+		t.Fatalf("import after unlink: %d MangaDex follows, following=%v", n, following)
+	}
+}
+
+func TestAdminsDeletingEachOther(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		s, ts := testServer(t)
+		a, _ := s.db.createUser("a", "pw", true)
+		b, _ := s.db.createUser("b", "pw", true)
+		ta, _ := s.db.createSession(a, "browser", "test")
+		tb, _ := s.db.createSession(b, "browser", "test")
+		var wg sync.WaitGroup
+		del := func(token string, target int64) {
+			defer wg.Done()
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/settings/users/%d/delete", ts.URL, target), nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+			res, err := http.DefaultClient.Do(req)
+			if err == nil {
+				res.Body.Close()
+			}
+		}
+		wg.Add(2)
+		go del(ta, b)
+		go del(tb, a)
+		wg.Wait()
+		var admins int
+		s.db.QueryRow(`SELECT count(*) FROM users WHERE admin=1`).Scan(&admins)
+		if admins == 0 {
+			t.Fatal("no admin left")
+		}
+	}
+}
+
+func TestTitleFallbackIsStable(t *testing.T) {
+	titles := map[string]string{"fr": "Le titre", "de": "Der Titel", "it": "Il titolo"}
+	for i := 0; i < 50; i++ {
+		if got := pickLang(titles, "en"); got != "Der Titel" {
+			t.Fatalf("got %q", got)
+		}
+	}
+}
+
+func TestLibrarySearch(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	s.db.upsertManga(&Manga{ID: mangaA, Title: "Akanabe", AltTitles: []string{"Rock & Roll", "100% Pure"}})
+	for q, want := range map[string]int{"rock & roll": 1, "100%": 1, "10_%": 0, `"`: 0, ",": 0, "u0026": 0} {
+		list, err := s.db.library(LibraryQuery{UserID: uid, Query: q})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list) != want {
+			t.Errorf("%q: got %d results, want %d", q, len(list), want)
+		}
+	}
+}
+
+func TestLangCodes(t *testing.T) {
+	got := langCodes([]string{"en", "es-la", "en", "en,ja", "", "EN", "pt-br"})
+	if strings.Join(got, ",") != "en,es-la,pt-br" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestLoginLimiterForgets(t *testing.T) {
+	l := &loginLimiter{fails: map[string][]time.Time{}}
+	l.fails["user:old"] = []time.Time{time.Now().Add(-time.Hour)}
+	for i := 0; i <= 10000; i++ {
+		l.fails[fmt.Sprintf("user:x%d", i)] = []time.Time{time.Now().Add(-time.Hour)}
+	}
+	l.fail([]string{"user:new"})
+	if len(l.fails) != 1 {
+		t.Fatalf("%d entries kept", len(l.fails))
+	}
+}
+
+func TestNewCoverNewLink(t *testing.T) {
+	s, _ := testServer(t)
+	u := &User{SessionID: "sid"}
+	a := s.coverURL(u, &Manga{ID: mangaA, Cover: "one.jpg"}, mangaA+"/thumb.jpg")
+	b := s.coverURL(u, &Manga{ID: mangaA, Cover: "two.jpg"}, mangaA+"/thumb.jpg")
+	if a == b {
+		t.Fatal("same link after the cover changed")
+	}
+}
+
+func TestCoverLinkLoads(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "kotatsu", "test")
+	u, _ := s.db.sessionUser(token)
+	os.WriteFile(filepath.Join(s.mangaDir, mangaA, "thumb.jpg"), []byte("jpg"), 0o644)
+	res, err := http.Get(ts.URL + s.coverURL(u, &Manga{ID: mangaA, Cover: "a b.jpg"}, mangaA+"/thumb.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got %d", res.StatusCode)
 	}
 }

@@ -299,6 +299,8 @@ func (db *DB) manga(id string, userID int64) (*Manga, error) {
 	return m, nil
 }
 
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 type LibraryQuery struct {
 	UserID   int64
 	Query    string
@@ -322,8 +324,8 @@ func (db *DB) library(q LibraryQuery) ([]*Manga, error) {
 		where = append(where, `EXISTS(SELECT 1 FROM chapters c WHERE c.manga_id=m.id AND c.state=2)`)
 	}
 	if q.Query != "" {
-		where = append(where, `(m.title LIKE ? OR m.alt_titles LIKE ?)`)
-		like := "%" + q.Query + "%"
+		where = append(where, `(m.title LIKE ? ESCAPE '\' OR EXISTS(SELECT 1 FROM json_each(m.alt_titles) WHERE value LIKE ? ESCAPE '\'))`)
+		like := "%" + likeEscaper.Replace(q.Query) + "%"
 		args = append(args, like, like)
 	}
 	for _, t := range q.Tags {
@@ -443,17 +445,17 @@ func (db *DB) followChoice(userID int64, mangaID string) bool {
 
 // applyFollow brings the follows table in line with the choice, or with
 // MangaDex when there is no choice.
+//
+// Each statement reads the current choice itself, so a sync or unlink running
+// at the same time can't leave the follows table on a stale answer.
 func (db *DB) applyFollow(userID int64, mangaID string) error {
-	want := db.onMangaDex(userID, mangaID)
-	var choice bool
-	if err := db.QueryRow(`SELECT following FROM follow_choices WHERE user_id=? AND manga_id=?`, userID, mangaID).Scan(&choice); err == nil {
-		want = choice
-	}
-	if want {
-		_, err := db.Exec(`INSERT INTO follows(user_id,manga_id,created) VALUES(?,?,?) ON CONFLICT DO NOTHING`, userID, mangaID, now())
+	const want = `coalesce((SELECT following FROM follow_choices WHERE user_id=?1 AND manga_id=?2),
+		EXISTS(SELECT 1 FROM mdx_follows WHERE user_id=?1 AND manga_id=?2))`
+	if _, err := db.Exec(`INSERT INTO follows(user_id,manga_id,created) SELECT ?1,?2,?3 WHERE `+want+` ON CONFLICT DO NOTHING`,
+		userID, mangaID, now()); err != nil {
 		return err
 	}
-	_, err := db.Exec(`DELETE FROM follows WHERE user_id=? AND manga_id=?`, userID, mangaID)
+	_, err := db.Exec(`DELETE FROM follows WHERE user_id=?1 AND manga_id=?2 AND NOT `+want, userID, mangaID)
 	return err
 }
 
@@ -478,7 +480,10 @@ func (db *DB) setMangaDexFollows(userID int64, list []*Manga) error {
 	changed := []string{}
 	for id := range current {
 		if !before[id] {
-			if _, err := db.Exec(`INSERT INTO mdx_follows(user_id,manga_id) VALUES(?,?)`, userID, id); err != nil {
+			// Only while the account is still linked, in case it was
+			// unlinked during the import.
+			if _, err := db.Exec(`INSERT INTO mdx_follows(user_id,manga_id) SELECT ?1,?2
+				WHERE EXISTS(SELECT 1 FROM mdx_accounts WHERE user_id=?1) ON CONFLICT DO NOTHING`, userID, id); err != nil {
 				return err
 			}
 			changed = append(changed, id)
@@ -503,6 +508,10 @@ func (db *DB) setMangaDexFollows(userID int64, list []*Manga) error {
 // unlinkMangaDex forgets a user's MangaDex follows. With keep, manga that
 // were followed only because of MangaDex stay followed, as choices.
 func (db *DB) unlinkMangaDex(userID int64, keep bool) error {
+	// Remove the account first so an import running now stops adding follows.
+	if _, err := db.Exec(`DELETE FROM mdx_accounts WHERE user_id=?`, userID); err != nil {
+		return err
+	}
 	ids := db.column(`SELECT manga_id FROM mdx_follows WHERE user_id=?`, userID)
 	if keep {
 		if _, err := db.Exec(`INSERT INTO follow_choices(user_id,manga_id,following)
@@ -523,8 +532,7 @@ func (db *DB) unlinkMangaDex(userID int64, keep bool) error {
 			return err
 		}
 	}
-	_, err := db.Exec(`DELETE FROM mdx_accounts WHERE user_id=?`, userID)
-	return err
+	return nil
 }
 
 // column runs a query that returns one text column.

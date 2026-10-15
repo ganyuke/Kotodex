@@ -20,8 +20,9 @@ type Downloader struct {
 	keys *Keys
 	dir  string
 
-	wake  chan struct{}
-	check chan string // manga ID, or "" for everything
+	wake    chan struct{}
+	check   chan string // manga ID, or "" for everything
+	resched chan struct{}
 
 	mu        sync.Mutex
 	checking  string // what the chapter check is doing, "" when idle
@@ -50,7 +51,7 @@ type Status struct {
 }
 
 func newDownloader(db *DB, mdx *MangaDex, keys *Keys, dir string) *Downloader {
-	return &Downloader{db: db, mdx: mdx, keys: keys, dir: dir, wake: make(chan struct{}, 1), check: make(chan string, 64)}
+	return &Downloader{db: db, mdx: mdx, keys: keys, dir: dir, wake: make(chan struct{}, 1), check: make(chan string, 64), resched: make(chan struct{}, 1)}
 }
 
 func (d *Downloader) setChecking(s string) {
@@ -85,6 +86,14 @@ func (d *Downloader) Wake() {
 	}
 }
 
+// Reschedule moves the next check to the current interval after the last one.
+func (d *Downloader) Reschedule() {
+	select {
+	case d.resched <- struct{}{}:
+	default:
+	}
+}
+
 // Check schedules a check of one manga, or of everything when id is "".
 func (d *Downloader) Check(id string) {
 	select {
@@ -111,6 +120,18 @@ func (d *Downloader) Run(ctx context.Context) {
 				d.checkManga(ctx, m)
 				d.setChecking("")
 			}
+		case <-d.resched:
+			d.mu.Lock()
+			last := d.lastCheck
+			d.mu.Unlock()
+			if last.IsZero() {
+				continue // the first check is still coming up
+			}
+			next := last.Add(d.db.settings().Interval)
+			timer.Reset(max(time.Until(next), 0))
+			d.mu.Lock()
+			d.nextCheck = next
+			d.mu.Unlock()
 		case <-timer.C:
 			d.checkAll(ctx)
 			interval := d.db.settings().Interval
@@ -286,7 +307,8 @@ func (d *Downloader) worker(ctx context.Context) {
 				state = stateFailed
 			}
 			log.Printf("download %s %s: %v", title, chapterLabel(c), err)
-			d.db.Exec(`UPDATE chapters SET tries=tries+1, error=?, state=? WHERE id=?`, err.Error(), state, c.ID)
+			// Only if it's still queued. Canceling or deleting it meanwhile wins.
+			d.db.Exec(`UPDATE chapters SET tries=tries+1, error=?, state=? WHERE id=? AND state=?`, err.Error(), state, c.ID, stateQueued)
 			select {
 			case <-ctx.Done():
 				return
@@ -358,16 +380,24 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 		return firstErr
 	}
 
+	// Deleting the chapter while it downloads can remove pages already done.
 	var size int64
 	for _, n := range names {
-		if st, err := os.Stat(filepath.Join(dir, n)); err == nil {
-			size += st.Size()
+		st, err := os.Stat(filepath.Join(dir, n))
+		if err != nil {
+			return fmt.Errorf("page %s is missing", n)
 		}
+		size += st.Size()
 	}
 	filesJSON, _ := json.Marshal(names)
-	if _, err := d.db.Exec(`UPDATE chapters SET state=2, files=?, size=?, pages=?, downloaded=?, error='' WHERE id=?`,
-		string(filesJSON), size, len(names), now(), c.ID); err != nil {
+	res, err := d.db.Exec(`UPDATE chapters SET state=2, files=?, size=?, pages=?, downloaded=?, error='' WHERE id=? AND state=?`,
+		string(filesJSON), size, len(names), now(), c.ID, stateQueued)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Canceled or deleted while downloading. Don't keep the pages.
+		return os.RemoveAll(dir)
 	}
 	_, err = d.db.Exec(`UPDATE manga SET latest=? WHERE id=?`, now(), c.MangaID)
 	return err
@@ -400,7 +430,7 @@ func (d *Downloader) syncAccounts(ctx context.Context) {
 		d.setChecking("Importing MangaDex follows")
 		if err := d.syncAccount(ctx, id); err != nil {
 			log.Printf("MangaDex follows for user %d: %v", id, err)
-			d.db.Exec(`UPDATE mdx_accounts SET error=? WHERE user_id=?`, err.Error(), id)
+			d.db.Exec(`UPDATE mdx_accounts SET error=? WHERE user_id=?`, userMessage(err), id)
 		}
 	}
 }

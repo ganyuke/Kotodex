@@ -29,14 +29,14 @@ type apiManga struct {
 }
 
 type apiChapter struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	Number    float64 `json:"number"`
-	Volume    int     `json:"volume"`
-	Lang      string  `json:"lang"`
-	Group     string  `json:"group"`
-	Published int64   `json:"published"`
-	Pages     int     `json:"pages"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Number    *float64 `json:"number"` // null for oneshots and extras without a number
+	Volume    int      `json:"volume"`
+	Lang      string   `json:"lang"`
+	Group     string   `json:"group"`
+	Published int64    `json:"published"`
+	Pages     int      `json:"pages"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -56,8 +56,8 @@ func (s *Server) toAPIManga(u *User, m *Manga) apiManga {
 		PublicURL: "https://mangadex.org/title/" + m.ID, Chapters: m.Downloaded, Updated: m.Latest * 1000,
 	}
 	if m.Cover != "" {
-		a.CoverURL = s.fileURL(u, thumbPath(m))
-		a.LargeCoverURL = s.fileURL(u, coverPath(m))
+		a.CoverURL = s.coverURL(u, m, thumbPath(m))
+		a.LargeCoverURL = s.coverURL(u, m, coverPath(m))
 	}
 	return a
 }
@@ -85,7 +85,7 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.db.createSession(u.ID, "kotatsu", device)
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err.Error())
+		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": token, "username": u.Name})
@@ -119,7 +119,7 @@ func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 		Readable: true,
 	})
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err.Error())
+		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	out := make([]apiManga, 0, len(list))
@@ -138,7 +138,7 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 	}
 	chapters, err := s.db.readableChapters(m.ID)
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err.Error())
+		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	out := struct {
@@ -146,7 +146,10 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 		ChapterList []apiChapter `json:"chapterList"`
 	}{apiManga: s.toAPIManga(u, m), ChapterList: make([]apiChapter, 0, len(chapters))}
 	for _, c := range chapters {
-		num, _ := strconv.ParseFloat(c.Number, 64)
+		var num *float64
+		if n, err := strconv.ParseFloat(c.Number, 64); err == nil {
+			num = &n
+		}
 		vol, _ := strconv.ParseFloat(c.Volume, 64)
 		out.ChapterList = append(out.ChapterList, apiChapter{
 			ID: c.ID, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
@@ -173,7 +176,7 @@ func (s *Server) apiPages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := s.db.allTags()
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err.Error())
+		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, nonNil(tags))

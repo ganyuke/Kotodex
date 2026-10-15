@@ -7,6 +7,10 @@ document.addEventListener("change", (e) => {
   if (e.target.matches("select[data-autosubmit]")) e.target.form.submit();
 });
 
+// Show the address this page was opened at. The server can only guess it
+// from proxy headers.
+document.querySelectorAll("[data-origin]").forEach((el) => (el.textContent = location.origin));
+
 // Refresh the [data-live] part of the page in place: every 2 seconds while
 // something is downloading or being checked, every 15 seconds otherwise.
 (() => {

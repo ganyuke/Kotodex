@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -103,14 +104,16 @@ func hashToken(t string) string {
 func (db *DB) createUser(name, password string, admin bool) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || password == "" {
-		return 0, errors.New("name and password are required")
+		return 0, shownError("Name and password are required.")
 	}
-	res, err := db.Exec(`INSERT INTO users(name,pass,admin,created) VALUES(?,?,?,?)`, name, hashPassword(password), admin, now())
+	// One statement, so two admins adding the same name at once can't race.
+	res, err := db.Exec(`INSERT INTO users(name,pass,admin,created) VALUES(?,?,?,?) ON CONFLICT(name) DO NOTHING`,
+		name, hashPassword(password), admin, now())
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			return 0, fmt.Errorf("a user named %s already exists", name)
-		}
 		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, shownError(fmt.Sprintf("A user named %s already exists.", name))
 	}
 	return res.LastInsertId()
 }
@@ -119,7 +122,7 @@ func (db *DB) createUser(name, password string, admin bool) (int64, error) {
 // also revokes every image link handed out to those sessions.
 func (db *DB) setPassword(userID int64, password string) error {
 	if password == "" {
-		return errors.New("password is required")
+		return shownError("Password is required.")
 	}
 	if _, err := db.Exec(`UPDATE users SET pass=? WHERE id=?`, hashPassword(password), userID); err != nil {
 		return err
@@ -249,6 +252,13 @@ func (s *Server) fileURL(u *User, path string) string {
 	return fmt.Sprintf("/img/%s/%s/%s", u.SessionID, s.sign(u.SessionID, path), path)
 }
 
+// coverURL links a cover or its thumbnail. Their paths stay the same when
+// MangaDex switches to another cover, and image links are cached for good,
+// so the cover's file name goes in the query to make a new link.
+func (s *Server) coverURL(u *User, m *Manga, path string) string {
+	return s.fileURL(u, path) + "?v=" + url.QueryEscape(m.Cover)
+}
+
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	sid, path := r.PathValue("sid"), r.PathValue("path")
 	if sid == "" || !filePathRe.MatchString(path) {
@@ -299,7 +309,7 @@ func (s *Server) web(admin bool, h http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login?next="+urlEscape(r.URL.RequestURI()), http.StatusSeeOther)
 			return
 		}
-		if r.Method == http.MethodPost && !sameOrigin(r) {
+		if crossOrigin.Check(r) != nil {
 			http.Error(w, "Cross-site request blocked", http.StatusForbidden)
 			return
 		}
@@ -326,20 +336,10 @@ func (s *Server) api(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// sameOrigin checks Origin (or Referer) against Host. Together with the
-// SameSite cookie this blocks cross-site form posts.
-func sameOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		origin = r.Header.Get("Referer")
-	}
-	if origin == "" {
-		return true
-	}
-	origin = strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")
-	host, _, _ := strings.Cut(origin, "/")
-	return host == r.Host || host == r.Header.Get("X-Forwarded-Host")
-}
+// crossOrigin blocks cross-site form posts. It trusts the browser's
+// Sec-Fetch-Site header first and only falls back to comparing Origin with
+// Host, so a reverse proxy that rewrites Host doesn't break same-site posts.
+var crossOrigin = http.NewCrossOriginProtection()
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{

@@ -5,6 +5,7 @@ import android.net.Uri
 import com.sun.net.httpserver.HttpServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -45,7 +46,10 @@ class ProviderTest {
                     {"id":"c1","title":"","number":1,"volume":1,"lang":"en","group":"G","published":1000},
                     {"id":"c2","title":"Two","number":2,"volume":1,"lang":"en","group":"G","published":2000},
                     {"id":"c3","title":"Two again","number":2,"volume":1,"lang":"en","group":"H","published":3000},
-                    {"id":"c4","title":"","number":1,"volume":0,"lang":"es","group":"","published":4000}]}"""
+                    {"id":"c4","title":"","number":1,"volume":0,"lang":"es","group":"","published":4000},
+                    {"id":"c5","title":"Extra","number":null,"volume":0,"lang":"en","group":"G","published":5000},
+                    {"id":"c6","title":"Another extra","number":null,"volume":0,"lang":"en","group":"G","published":6000},
+                    {"id":"c7","title":"","number":1,"volume":0,"lang":"es-la","group":"","published":7000}]}"""
                 ex.requestURI.path == "/api/v1/chapters/c2/pages" -> 200 to """["/img/1/s/m1/c2/001.jpg","/img/1/s/m1/c2/002.jpg"]"""
                 ex.requestURI.path == "/api/v1/tags" -> 200 to """["Comedy","Sci:Fi"]"""
                 else -> 404 to """{"error":"Not found"}"""
@@ -93,15 +97,19 @@ class ProviderTest {
         assertEquals("Desc", d.str("description"))
 
         val c = query("$auth/manga/chapters/m1")
-        assertEquals(4, c.count)
+        assertEquals(7, c.count)
         val branches = mutableListOf<String?>()
         val names = mutableListOf<String?>()
         while (c.moveToNext()) {
             branches += c.str("branch")
             names += c.str("name")
         }
-        // The second upload of chapter 2 goes to its own branch.
-        assertEquals(listOf("English", "English", "English (1)", "Español"), branches)
+        // The second upload of chapter 2 goes to its own branch. Extras
+        // without a number stay in the main one.
+        assertEquals(listOf("English", "English", "English (1)", "Español", "English", "English"), branches.take(6))
+        // Latin American Spanish, not Spanish from Laos.
+        assertTrue(branches[6]!!.startsWith("Español ("))
+        assertFalse(branches[6]!!.contains("Laos"))
         assertNull(names[0])
         c.moveToFirst()
         assertEquals("c1", c.str("url"))

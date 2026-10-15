@@ -68,7 +68,7 @@ class MangaProvider : ContentProvider() {
     private fun checkCaller() {
         val caller = callingPackage ?: throw SecurityException("Kotodex couldn't tell which app is asking")
         if (caller == context!!.packageName || caller in KOTATSU_PACKAGES || caller in prefs.allowedApps) return
-        prefs.requestedApps = prefs.requestedApps + caller
+        prefs.request(caller)
         throw SecurityException("Open the Kotodex app and allow $caller")
     }
 
@@ -145,15 +145,21 @@ class MangaProvider : ContentProvider() {
         val taken = HashMap<String, HashSet<Pair<Int, Float>>>()
         for (i in 0 until list.length()) {
             val c = list.getJSONObject(i)
+            val numbered = !c.isNull("number")
             val number = c.optDouble("number", 0.0).toFloat()
             val volume = c.optInt("volume", 0)
-            val locale = Locale.forLanguageTag(c.optString("lang"))
+            val locale = Locale.forLanguageTag(languageTag(c.optString("lang")))
             val lang = locale.getDisplayName(locale).replaceFirstChar { it.titlecase(locale) }
             val key = volume to number
-            val branch = generateSequence(0) { it + 1 }
-                .map { if (it == 0) lang else "$lang ($it)" }
-                .first { taken[it]?.contains(key) != true }
-            taken.getOrPut(branch, ::HashSet).add(key)
+            // Chapters without a number can't be the same chapter twice.
+            val branch = if (!numbered) {
+                lang
+            } else {
+                generateSequence(0) { it + 1 }
+                    .map { if (it == 0) lang else "$lang ($it)" }
+                    .first { taken[it]?.contains(key) != true }
+                    .also { taken.getOrPut(it, ::HashSet).add(key) }
+            }
             val chapterId = c.getString("id")
             cursor.addRow(
                 arrayOf<Any?>(
@@ -219,6 +225,17 @@ class MangaProvider : ContentProvider() {
 
         private fun JSONArray?.strings(): List<String> =
             if (this == null) emptyList() else List(length()) { getString(it) }
+
+        /**
+         * MangaDex language codes as BCP 47 tags. "es-la" is Latin American
+         * Spanish, not Spanish from Laos, and "ja-ro" is romanized Japanese,
+         * not Japanese from Romania.
+         */
+        fun languageTag(code: String): String = when {
+            code == "es-la" -> "es-419"
+            code.endsWith("-ro") -> code.removeSuffix("-ro") + "-Latn"
+            else -> code
+        }
 
         /** Kotatsu packs tags as "key=title:key=title", so those characters can't appear in a tag. */
         private fun tagKey(tag: String) = tag.replace(':', ' ').replace('=', ' ')

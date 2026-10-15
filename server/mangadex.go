@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,10 +178,19 @@ func pickLang(m map[string]string, langs ...string) string {
 			return v
 		}
 	}
-	for _, v := range m {
-		return v
+	// Map order is random, so take the first language alphabetically.
+	// Otherwise the title could change on every refresh.
+	keys := make([]string, 0, len(m))
+	for k, v := range m {
+		if v != "" {
+			keys = append(keys, k)
+		}
 	}
-	return ""
+	if len(keys) == 0 {
+		return ""
+	}
+	slices.Sort(keys)
+	return m[keys[0]]
 }
 
 // toManga converts a MangaDex manga. Titles prefer English, then romanized.
@@ -195,15 +205,15 @@ func (mm *mdxManga) toManga() *Manga {
 		Rating:      a.Rating,
 	}
 	seen := map[string]bool{m.Title: true}
-	for _, v := range a.Title {
-		if !seen[v] {
+	for _, k := range slices.Sorted(maps.Keys(a.Title)) {
+		if v := a.Title[k]; !seen[v] {
 			seen[v] = true
 			m.AltTitles = append(m.AltTitles, v)
 		}
 	}
 	for _, alt := range a.AltTitles {
-		for _, v := range alt {
-			if !seen[v] {
+		for _, k := range slices.Sorted(maps.Keys(alt)) {
+			if v := alt[k]; !seen[v] {
 				seen[v] = true
 				m.AltTitles = append(m.AltTitles, v)
 			}
@@ -423,7 +433,7 @@ func (m *MangaDex) token(ctx context.Context, form url.Values) (*mdxTokens, erro
 		if t.Error == "" {
 			t.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		return nil, errors.New("MangaDex sign-in failed: " + t.Error)
+		return nil, shownError("MangaDex sign-in failed: " + t.Error)
 	}
 	return &t, nil
 }

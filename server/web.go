@@ -2,18 +2,24 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 //go:embed templates/*.html
@@ -23,6 +29,30 @@ var templateFS embed.FS
 var staticFS embed.FS
 
 func urlEscape(s string) string { return url.QueryEscape(s) }
+
+// shownError is an error written for the person using Kotodex, like a
+// missing field or a name already in use.
+type shownError string
+
+func (e shownError) Error() string { return string(e) }
+
+// userMessage turns an error into something to show on a page. Database and
+// file errors go to the log, so their text never reaches the browser.
+func userMessage(err error) string {
+	var se shownError
+	var me *mdxError
+	var ue *url.Error
+	switch {
+	case errors.As(err, &se), errors.As(err, &me), errors.Is(err, errWrongKey):
+		return err.Error()
+	case errors.As(err, &ue):
+		// Only MangaDex requests go out over HTTP.
+		log.Printf("MangaDex: %v", err)
+		return "Can't reach MangaDex. Try again later."
+	}
+	log.Printf("error: %v", err)
+	return "Something went wrong. Try again."
+}
 
 // Login throttling: 10 failed attempts per address, and per account, every
 // 15 minutes.
@@ -39,7 +69,11 @@ func (l *loginLimiter) recent(ip string) []time.Time {
 			keep = append(keep, t)
 		}
 	}
-	l.fails[ip] = keep
+	if len(keep) == 0 {
+		delete(l.fails, ip)
+	} else {
+		l.fails[ip] = keep
+	}
 	return keep
 }
 
@@ -57,6 +91,12 @@ func (l *loginLimiter) allow(keys []string) bool {
 func (l *loginLimiter) fail(keys []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Guesses at many made-up names would otherwise pile up here.
+	if len(l.fails) > 10000 {
+		for k := range l.fails {
+			l.recent(k)
+		}
+	}
 	for _, k := range keys {
 		l.fails[k] = append(l.recent(k), time.Now())
 	}
@@ -85,7 +125,7 @@ func clientIP(r *http.Request) string {
 // loginKeys are what failed sign-ins are counted against: the address, and
 // the account, so spreading guesses over many addresses doesn't help.
 func loginKeys(r *http.Request, username string) []string {
-	return []string{"ip:" + clientIP(r), "user:" + strings.ToLower(strings.TrimSpace(username))}
+	return []string{"ip:" + clientIP(r), "user:" + truncate(strings.ToLower(strings.TrimSpace(username)), 100)}
 }
 
 func serverAddress(r *http.Request) string {
@@ -115,6 +155,20 @@ var langNames = map[string]string{
 }
 
 type langOption struct{ Code, Name string }
+
+var langCodeRe = regexp.MustCompile(`^[a-z]{2,3}(-[a-z]{2,3})?$`)
+
+// langCodes keeps the MangaDex language codes from a form, once each. Lists
+// are stored comma-separated, so anything else would break them.
+func langCodes(in []string) []string {
+	var out []string
+	for _, l := range in {
+		if langCodeRe.MatchString(l) && !slices.Contains(out, l) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
 
 // allLangs lists the named MangaDex languages, sorted by name.
 func allLangs() []langOption {
@@ -237,8 +291,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p p
 }
 
 // localPath accepts only paths on this site. Browsers read "/\x" like
-// "//x", another site, so backslashes are refused too.
+// "//x", another site, so backslashes are refused too. They also drop tabs
+// and newlines from URLs ("/\t/x" becomes "//x"), which url.Parse rejects.
 func localPath(p string) bool {
+	if _, err := url.Parse(p); err != nil {
+		return false
+	}
 	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.Contains(p, "\\")
 }
 
@@ -275,7 +333,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			token, err := s.db.createSession(u.ID, "browser", r.UserAgent())
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, userMessage(err), http.StatusInternalServerError)
 				return
 			}
 			setSessionCookie(w, r, token)
@@ -301,7 +359,7 @@ func (s *Server) libraryPage(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	list, err := s.db.library(LibraryQuery{UserID: u.ID, Query: q, Sort: r.URL.Query().Get("sort"), Followed: show != "all"})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	type row struct {
@@ -312,7 +370,7 @@ func (s *Server) libraryPage(w http.ResponseWriter, r *http.Request) {
 	for _, m := range list {
 		thumb := ""
 		if m.Cover != "" {
-			thumb = s.fileURL(u, thumbPath(m))
+			thumb = s.coverURL(u, m, thumbPath(m))
 		}
 		rows = append(rows, row{m, thumb})
 	}
@@ -334,7 +392,7 @@ func (s *Server) searchPage(w http.ResponseWriter, r *http.Request) {
 		// A pasted MangaDex link or ID goes straight to that title.
 		if id := mangaIDFrom(q); id != "" {
 			if err := s.addManga(r, id); err != nil {
-				p.Error = err.Error()
+				p.Error = userMessage(err)
 			} else {
 				http.Redirect(w, r, "/manga/"+id, http.StatusSeeOther)
 				return
@@ -342,7 +400,7 @@ func (s *Server) searchPage(w http.ResponseWriter, r *http.Request) {
 		}
 		list, err := s.mdx.search(r.Context(), q, s.db.settings().ContentRatings)
 		if err != nil {
-			p.Error = err.Error()
+			p.Error = userMessage(err)
 		}
 		for _, m := range list {
 			var following bool
@@ -363,10 +421,14 @@ func mangaIDFrom(s string) string {
 		s = s[i+len("/title/"):]
 		s, _, _ = strings.Cut(s, "/")
 	}
-	if len(s) == 36 && strings.Count(s, "-") == 4 {
-		return strings.ToLower(s)
+	if len(s) != 36 {
+		return ""
 	}
-	return ""
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return id.String()
 }
 
 // addManga makes sure a MangaDex title is in the database.
@@ -394,11 +456,11 @@ func (s *Server) followAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.addManga(r, id); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, userMessage(err), http.StatusBadGateway)
 		return
 	}
 	if err := s.db.setFollow(u.ID, id, true); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	s.dl.Check(id)
@@ -407,7 +469,11 @@ func (s *Server) followAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) unfollowAction(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	id := r.FormValue("id")
+	id := mangaIDFrom(r.FormValue("id"))
+	if id == "" {
+		http.Error(w, "Bad manga ID", http.StatusBadRequest)
+		return
+	}
 	s.db.setFollow(u.ID, id, false)
 	back(w, r, "/manga/"+id, "Unfollowed.")
 }
@@ -459,7 +525,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		seen[l.Code] = true
 		langChoices = append(langChoices, l)
 	}
-	for l := range followLangs {
+	for _, l := range slices.Sorted(maps.Keys(followLangs)) {
 		if !seen[l] {
 			langChoices = append(langChoices, LangCount{Code: l})
 		}
@@ -470,7 +536,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	}
 	cover := ""
 	if m.Cover != "" {
-		cover = s.fileURL(u, thumbPath(m))
+		cover = s.coverURL(u, m, thumbPath(m))
 	}
 	st := s.dl.Status()
 	var current *Progress
@@ -497,7 +563,7 @@ func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
 	id, lang := r.PathValue("id"), r.FormValue("lang")
 	chapters, err := s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) AND (?='' OR c.lang=?) ORDER BY c.published`, id, lang, lang)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	n := 0
@@ -518,7 +584,7 @@ func (s *Server) mangaLanguages(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	id := r.PathValue("id")
 	r.ParseForm()
-	langs := r.Form["lang"]
+	langs := langCodes(r.Form["lang"])
 	if len(langs) == 0 {
 		back(w, r, "/manga/"+id, "Pick at least one language, or unfollow.")
 		return
@@ -542,7 +608,7 @@ func (s *Server) mangaDeleteFiles(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.dl.deleteChapterFiles(c); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, userMessage(err), http.StatusInternalServerError)
 			return
 		}
 		n++
@@ -582,7 +648,7 @@ func (s *Server) chapterDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.dl.deleteChapterFiles(c); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	back(w, r, "/manga/"+c.MangaID, "")
@@ -595,7 +661,7 @@ const historyPage = 50
 func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 	queue, err := s.db.queue()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	var queued, failed int
@@ -612,7 +678,7 @@ func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	history, err := s.db.history(historyPage, (page-1)*historyPage)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, userMessage(err), http.StatusInternalServerError)
 		return
 	}
 	var total int64
@@ -700,7 +766,7 @@ func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.setPassword(u.ID, r.FormValue("new")); err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	// Changing the password signs out every device, including this one.
@@ -720,14 +786,14 @@ func (s *Server) settingsMangaDex(w http.ResponseWriter, r *http.Request) {
 	clientID, secret := strings.TrimSpace(r.FormValue("client_id")), strings.TrimSpace(r.FormValue("client_secret"))
 	tok, err := s.mdx.login(r.Context(), user, pass, clientID, secret)
 	if err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	_, err = s.db.Exec(`INSERT INTO mdx_accounts(user_id,username,client_id,client_secret,refresh) VALUES(?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, client_id=excluded.client_id,
 		client_secret=excluded.client_secret, refresh=excluded.refresh, error=''`, u.ID, user, clientID, s.keys.seal(secret), s.keys.seal(tok.Refresh))
 	if err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	s.dl.Check("")
@@ -736,7 +802,7 @@ func (s *Server) settingsMangaDex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settingsMangaDexUnlink(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.unlinkMangaDex(currentUser(r).ID, r.FormValue("keep") == "1"); err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	back(w, r, "/settings", "MangaDex account unlinked.")
@@ -760,12 +826,13 @@ func (s *Server) settingsServer(w http.ResponseWriter, r *http.Request) {
 	s.db.setSetting("interval", strconv.Itoa(interval))
 	s.db.setSetting("data_saver", dataSaver)
 	s.db.setSetting("content_ratings", strings.Join(ratings, ","))
+	s.dl.Reschedule()
 	back(w, r, "/settings", "Saved.")
 }
 
 func (s *Server) settingsLanguages(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	langs := r.Form["lang"]
+	langs := langCodes(r.Form["lang"])
 	if len(langs) == 0 {
 		s.renderSettings(w, r, "Pick at least one language.")
 		return
@@ -776,7 +843,7 @@ func (s *Server) settingsLanguages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settingsAddUser(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.db.createUser(r.FormValue("username"), r.FormValue("password"), r.FormValue("admin") == "1"); err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	back(w, r, "/settings", "User added.")
@@ -785,7 +852,7 @@ func (s *Server) settingsAddUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) settingsResetPassword(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err := s.db.setPassword(id, r.FormValue("password")); err != nil {
-		s.renderSettings(w, r, err.Error())
+		s.renderSettings(w, r, userMessage(err))
 		return
 	}
 	if id == currentUser(r).ID {
@@ -801,7 +868,16 @@ func (s *Server) settingsDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.renderSettings(w, r, "You can't delete your own account.")
 		return
 	}
-	s.db.Exec(`DELETE FROM users WHERE id=?`, id)
+	// One statement, so two admins deleting each other can't both succeed.
+	res, err := s.db.Exec(`DELETE FROM users WHERE id=? AND (admin=0 OR (SELECT count(*) FROM users WHERE admin=1) > 1)`, id)
+	if err != nil {
+		s.renderSettings(w, r, userMessage(err))
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		s.renderSettings(w, r, "Can't delete the last admin.")
+		return
+	}
 	back(w, r, "/settings", "User deleted.")
 }
 
