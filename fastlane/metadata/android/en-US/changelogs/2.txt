@@ -1,0 +1,1 @@
+Passwords longer than 72 characters work now.
