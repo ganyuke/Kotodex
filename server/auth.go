@@ -127,8 +127,7 @@ func (db *DB) setPassword(userID int64, password string) error {
 	if _, err := db.Exec(`UPDATE users SET pass=? WHERE id=?`, hashPassword(password), userID); err != nil {
 		return err
 	}
-	_, err := db.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
-	db.signedOut.notify()
+	_, err := db.usersChanged(db.Exec(`DELETE FROM sessions WHERE user_id=?`, userID))
 	return err
 }
 
@@ -189,13 +188,17 @@ func (db *DB) sessionUser(token string) (*User, error) {
 // deleteIdleSessions removes sessions past the idle limit. Expired sessions
 // are refused anyway. This keeps them out of the device list.
 func (db *DB) deleteIdleSessions() {
-	db.Exec(`DELETE FROM sessions WHERE used < ?`, idleCutoff())
-	db.signedOut.notify()
+	db.usersChanged(db.Exec(`DELETE FROM sessions WHERE used < ?`, idleCutoff()))
 }
 
 func (db *DB) deleteSession(token string) {
-	db.Exec(`DELETE FROM sessions WHERE hash=?`, hashToken(token))
-	db.signedOut.notify()
+	db.usersChanged(db.Exec(`DELETE FROM sessions WHERE hash=?`, hashToken(token)))
+}
+
+// signOutDevice deletes one of the user's sessions by its stored hash, as
+// listed on the settings page.
+func (db *DB) signOutDevice(userID int64, hash string) {
+	db.usersChanged(db.Exec(`DELETE FROM sessions WHERE hash=? AND user_id=?`, hash, userID))
 }
 
 type Session struct {
@@ -309,11 +312,20 @@ func (s *Server) web(admin bool, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.db.sessionUser(sessionToken(r))
 		if err != nil {
+			// A live update stream would follow the redirect to the sign-in
+			// page and fail, and the browser would keep retrying.
+			if wantsStream(r) {
+				if rc, err := startStream(w); err == nil {
+					endStream(w, rc)
+				}
+				return
+			}
 			http.Redirect(w, r, "/login?next="+urlEscape(r.URL.RequestURI()), http.StatusSeeOther)
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), userKey, u))
 		if crossOrigin.Check(r) != nil {
-			http.Error(w, "Cross-site request blocked", http.StatusForbidden)
+			s.errorPage(w, r, http.StatusForbidden, "Cross-site request blocked")
 			return
 		}
 		// Keep the cookie as long-lived as the session it carries.
@@ -321,10 +333,10 @@ func (s *Server) web(admin bool, h http.HandlerFunc) http.HandlerFunc {
 			setSessionCookie(w, r, sessionToken(r))
 		}
 		if admin && !u.Admin {
-			http.Error(w, "Only admins can do this", http.StatusForbidden)
+			s.errorPage(w, r, http.StatusForbidden, "You don't have permission to do this")
 			return
 		}
-		h(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
+		h(w, r)
 	}
 }
 
@@ -344,14 +356,16 @@ func (s *Server) api(h http.HandlerFunc) http.HandlerFunc {
 // Host, so a reverse proxy that rewrites Host doesn't break same-site posts.
 var crossOrigin = http.NewCrossOriginProtection()
 
+// setCookie sets c with the attributes every Kotodex cookie shares. Secure
+// trusts X-Forwarded-Proto only to add the flag: a wrong header at worst
+// leaves it off, as without a proxy.
+func setCookie(w http.ResponseWriter, r *http.Request, c *http.Cookie) {
+	c.HttpOnly = true
+	c.Secure = r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	c.SameSite = http.SameSiteLaxMode
+	http.SetCookie(w, c)
+}
+
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionIdle),
-	})
+	setCookie(w, r, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", Expires: time.Now().Add(sessionIdle)})
 }

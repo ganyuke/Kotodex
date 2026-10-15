@@ -18,14 +18,15 @@ document.querySelectorAll("[data-origin]").forEach((el) => (el.textContent = loc
 // The browser reconnects dropped streams by itself, but gives up for good
 // when a reconnect gets an error page (a proxy's 502 while the server
 // restarts). Then it's reopened here, waiting twice as long after each
-// failure, up to a minute. Signing out ends it for good.
+// failure, up to a minute. When the page is gone or the user is signed out,
+// the server ends the stream and the page reloads to show that.
 (() => {
   if (!document.querySelector("[data-live]")) return;
   const maxDelay = 60000;
   let events = null;
   let retry = null;
   let delay = 1000;
-  let signedOut = false;
+  let ended = false;
   const close = () => {
     events?.close();
     events = null;
@@ -41,14 +42,15 @@ document.querySelectorAll("[data-origin]").forEach((el) => (el.textContent = loc
       const live = document.querySelector("[data-live]");
       if (fresh && live) live.replaceWith(fresh);
     };
-    events.addEventListener("signedout", () => {
-      signedOut = true;
+    events.addEventListener("end", () => {
+      ended = true;
       close();
+      location.reload();
     });
     events.onerror = () => {
       if (events?.readyState !== EventSource.CLOSED) return; // the browser is retrying
       events = null;
-      if (signedOut || document.hidden) return;
+      if (ended || document.hidden) return;
       // Random spread so tabs don't all come back at the same moment.
       retry = setTimeout(open, delay / 2 + Math.random() * (delay / 2));
       delay = Math.min(delay * 2, maxDelay);
@@ -56,7 +58,7 @@ document.querySelectorAll("[data-origin]").forEach((el) => (el.textContent = loc
   };
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) close();
-    else if (!events && !signedOut) open();
+    else if (!events && !ended) open();
   });
   if (!document.hidden) open();
 })();

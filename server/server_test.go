@@ -750,9 +750,81 @@ func TestNoticeShowsOnce(t *testing.T) {
 	if strings.Contains(page(res), "Checking for new chapters.") {
 		t.Fatal("notice shown twice")
 	}
+	// Another page loaded in between leaves the notice for the page it's for.
+	noFollow := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, _ = noFollow.PostForm(ts.URL+"/manga/"+mangaA+"/check", url.Values{"next": {"/manga/" + mangaA + "?lang=en"}})
+	res.Body.Close()
+	res, _ = client.Get(ts.URL + "/downloads")
+	if strings.Contains(page(res), "Checking for new chapters.") {
+		t.Fatal("notice shown on another page")
+	}
+	res, _ = client.Get(ts.URL + "/manga/" + mangaA)
+	if !strings.Contains(page(res), "Checking for new chapters.") {
+		t.Fatal("notice lost")
+	}
 	res, _ = client.Get(ts.URL + "/manga/" + mangaA + "?notice=Sign+in+at+evil.example")
 	if strings.Contains(page(res), "evil.example") {
 		t.Fatal("notice taken from URL")
+	}
+}
+
+// sseStream reads one live update stream.
+type sseStream struct {
+	res   *http.Response
+	body  *bufio.Reader
+	event string // name of the last event read
+}
+
+func openStream(t *testing.T, url, token string) *sseStream {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { res.Body.Close() })
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	return &sseStream{res: res, body: bufio.NewReader(res.Body)}
+}
+
+// next returns the data of the next event.
+func (st *sseStream) next() (string, error) {
+	var data []string
+	st.event = "message"
+	for {
+		line, err := st.body.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case line == "" && data != nil:
+			return strings.Join(data, "\n"), nil
+		case strings.HasPrefix(line, "event: "):
+			st.event = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data:"):
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+}
+
+// expectEnd checks that the stream tells the page to reload, then closes.
+func (st *sseStream) expectEnd(t *testing.T) {
+	t.Helper()
+	if _, err := st.next(); err != nil || st.event != "end" {
+		t.Fatalf("expected end, got %q %v", st.event, err)
+	}
+	if ev, err := st.next(); err == nil {
+		t.Fatalf("stream still open after end: %s", ev)
 	}
 }
 
@@ -760,42 +832,9 @@ func TestLiveUpdates(t *testing.T) {
 	s, ts := testServer(t)
 	uid := seed(t, s)
 	token, _ := s.db.createSession(uid, "browser", "test")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/downloads", nil)
-	req.Header.Set("Accept", "text/event-stream")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("content type %q", ct)
-	}
-	body := bufio.NewReader(res.Body)
-	var event string
-	next := func() (string, error) {
-		var data []string
-		event = "message"
-		for {
-			line, err := body.ReadString('\n')
-			if err != nil {
-				return "", err
-			}
-			line = strings.TrimSuffix(line, "\n")
-			switch {
-			case line == "" && data != nil:
-				return strings.Join(data, "\n"), nil
-			case strings.HasPrefix(line, "event: "):
-				event = strings.TrimPrefix(line, "event: ")
-			case strings.HasPrefix(line, "data:"):
-				data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
-			}
-		}
-	}
+	st := openStream(t, ts.URL+"/downloads", token)
 
-	ev, err := next()
+	ev, err := st.next()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -805,16 +844,124 @@ func TestLiveUpdates(t *testing.T) {
 
 	s.db.setChapterState(chapter1, stateQueued)
 	s.dl.Wake()
-	if ev, err = next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
+	if ev, err = st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
 		t.Fatalf("after queueing: %v %s", err, ev)
 	}
 
 	s.db.deleteSession(token)
-	if _, err = next(); err != nil || event != "signedout" {
-		t.Fatalf("expected signedout, got %q %v", event, err)
+	st.expectEnd(t)
+}
+
+func TestLiveSignedOutBeforeReconnect(t *testing.T) {
+	_, ts := testServer(t)
+	openStream(t, ts.URL+"/downloads", "expired").expectEnd(t)
+}
+
+func TestLiveEndsWhenPageGone(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	st := openStream(t, ts.URL+"/manga/"+mangaA, token)
+	if _, err := st.next(); err != nil {
+		t.Fatal(err)
 	}
-	if ev, err = next(); err == nil {
-		t.Fatalf("stream still open after sign-out: %s", ev)
+	s.db.Exec(`DELETE FROM follows WHERE manga_id=?`, mangaA)
+	s.db.Exec(`DELETE FROM chapters WHERE manga_id=?`, mangaA)
+	if _, err := s.db.Exec(`DELETE FROM manga WHERE id=?`, mangaA); err != nil {
+		t.Fatal(err)
+	}
+	s.dl.Changed()
+	st.expectEnd(t)
+}
+
+func TestLiveUsesCurrentUser(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	st := openStream(t, ts.URL+"/manga/"+mangaA, token)
+	if ev, err := st.next(); err != nil || strings.Contains(ev, "/delete") {
+		t.Fatalf("non-admin sees delete: %v %s", err, ev)
+	}
+	s.db.Exec(`UPDATE users SET admin=1 WHERE id=?`, uid)
+	s.dl.Changed()
+	if ev, err := st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/delete") {
+		t.Fatalf("admin doesn't see delete: %v %s", err, ev)
+	}
+}
+
+func TestLiveProgress(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	s.dl.mu.Lock()
+	s.dl.current = &Progress{ChapterID: chapter2, MangaID: mangaA, MangaTitle: "Akanabe", Label: "Ch. 9.5", Total: 20}
+	s.dl.mu.Unlock()
+	if s.downloadingManga(httptest.NewRequest("GET", "/", nil)) {
+		t.Fatal("no id should match nothing")
+	}
+	st := openStream(t, ts.URL+"/downloads", token)
+	first, err := st.next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.dl.progress(func(p *Progress) { p.Done = 7 })
+	ev, err := st.next()
+	if err != nil || ev == first {
+		t.Fatalf("progress didn't update the page: %v %s", err, ev)
+	}
+}
+
+func TestSignOutWakesOnlyWhenSomethingWasRemoved(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	woke := func() bool {
+		select {
+		case <-s.db.signedOut.wait():
+			return true
+		default:
+			return false
+		}
+	}
+	token, _ := s.db.createSession(uid, "browser", "test")
+	s.db.signedOut.wait()
+	s.db.deleteIdleSessions()
+	s.db.deleteSession("unknown")
+	if woke() {
+		t.Fatal("woke with nothing removed")
+	}
+	ch := s.db.signedOut.wait()
+	s.db.deleteSession(token)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("didn't wake after a sign-out")
+	}
+}
+
+func TestLiveOutlivesReadTimeout(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	s.closing = make(chan struct{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := s.httpServer()
+	srv.ReadTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go serve(ctx, srv, ln)
+
+	st := openStream(t, "http://"+ln.Addr().String()+"/downloads", token)
+	if _, err := st.next(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * srv.ReadTimeout)
+	s.db.setChapterState(chapter1, stateQueued)
+	s.dl.Wake()
+	if ev, err := st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
+		t.Fatalf("stream ended after the read timeout: %v %s", err, ev)
 	}
 }
 
@@ -937,5 +1084,52 @@ func TestShutdownGrace(t *testing.T) {
 	}
 	if _, err := http.Get(base + "/slow"); err == nil {
 		t.Fatal("still taking connections")
+	}
+}
+
+func TestErrorsArePages(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	get := func(path string, signedIn bool) (*http.Response, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		if signedIn {
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return res, string(b)
+	}
+	for _, path := range []string{"/manga/00000000-0000-0000-0000-000000000000", "/no/such/page"} {
+		res, body := get(path, true)
+		if res.StatusCode != http.StatusNotFound || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
+			t.Fatalf("%s: %d %s", path, res.StatusCode, res.Header.Get("Content-Type"))
+		}
+		if !strings.Contains(body, "Page not found") || !strings.Contains(body, `href="/downloads"`) {
+			t.Fatalf("%s: not a full page with the header: %s", path, body)
+		}
+	}
+	if _, body := get("/no/such/page", false); strings.Contains(body, `href="/downloads"`) {
+		t.Fatal("header shown when signed out")
+	}
+	req, _ := http.NewRequest("POST", ts.URL+"/chapter/"+chapter1+"/delete", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "You don&#39;t have permission to do this") || !strings.Contains(string(b), "<html") {
+		t.Fatalf("admin-only: %d %s", res.StatusCode, b)
+	}
+	res, body := get("/api/v1/nope", false)
+	if res.StatusCode != http.StatusNotFound || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("api: %d %s %s", res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
 }

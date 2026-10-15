@@ -30,7 +30,8 @@ type Downloader struct {
 	nextCheck time.Time
 	current   *Progress // chapter being downloaded, nil when idle
 
-	changed changes // what the live pages show
+	changed    changes // what the live pages show
+	progressed changes // pages of the chapter being downloaded
 }
 
 // Progress of the chapter being downloaded.
@@ -83,7 +84,7 @@ func (d *Downloader) progress(f func(p *Progress)) {
 		f(d.current)
 	}
 	d.mu.Unlock()
-	d.Changed()
+	d.progressed.notify()
 }
 
 // Wake is called whenever the queue changed, so open pages update too.

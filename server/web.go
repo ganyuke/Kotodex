@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -279,6 +280,25 @@ type pageData struct {
 	Data   any
 }
 
+// errorPage shows msg as a page of its own, with the usual header and a way
+// back. Plain-text errors would show unstyled, since the CSP blocks the
+// browser's own styling of them.
+func (s *Server) errorPage(w http.ResponseWriter, r *http.Request, code int, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	if liveFragment(r) {
+		return // the stream ends and the page reloads into this
+	}
+	p := pageData{Title: msg, User: currentUser(r)}
+	if err := s.pages["error"].Execute(w, p); err != nil {
+		log.Printf("render error: %v", err)
+	}
+}
+
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	s.errorPage(w, r, http.StatusNotFound, "Page not found")
+}
+
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p pageData) {
 	p.User = currentUser(r)
 	if p.Notice == "" {
@@ -314,30 +334,34 @@ func back(w http.ResponseWriter, r *http.Request, fallback, notice string) {
 		next = fallback
 	}
 	if notice != "" {
-		http.SetCookie(w, &http.Cookie{
-			Name:     noticeCookie,
-			Value:    url.QueryEscape(notice),
-			Path:     "/",
-			MaxAge:   60,
-			HttpOnly: true,
-			Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-			SameSite: http.SameSiteLaxMode,
-		})
+		// Only the page redirected to gets the cookie and shows it.
+		path := "/"
+		if u, err := url.Parse(next); err == nil && u.Path != "" {
+			path = u.EscapedPath()
+		}
+		value := url.Values{"path": {path}, "text": {notice}}.Encode()
+		setCookie(w, r, &http.Cookie{Name: noticeCookie, Value: value, Path: path, MaxAge: 60})
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 const noticeCookie = "notice"
 
-// takeNotice reads the notice left by back and clears it.
+// takeNotice reads the notice back left for this page and clears it.
 func takeNotice(w http.ResponseWriter, r *http.Request) string {
+	if r.Method != http.MethodGet || liveFragment(r) {
+		return ""
+	}
 	c, err := r.Cookie(noticeCookie)
 	if err != nil {
 		return ""
 	}
-	http.SetCookie(w, &http.Cookie{Name: noticeCookie, Path: "/", MaxAge: -1})
-	notice, _ := url.QueryUnescape(c.Value)
-	return notice
+	v, err := url.ParseQuery(c.Value)
+	if err != nil || v.Get("path") != r.URL.EscapedPath() {
+		return ""
+	}
+	setCookie(w, r, &http.Cookie{Name: noticeCookie, Path: v.Get("path"), MaxAge: -1})
+	return v.Get("text")
 }
 
 // Sign-in
@@ -358,7 +382,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			token, err := s.db.createSession(u.ID, "browser", r.UserAgent())
 			if err != nil {
-				http.Error(w, userMessage(err), http.StatusInternalServerError)
+				s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 				return
 			}
 			setSessionCookie(w, r, token)
@@ -372,7 +396,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.db.deleteSession(sessionToken(r))
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1})
+	setCookie(w, r, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -384,7 +408,7 @@ func (s *Server) libraryPage(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	list, err := s.db.library(LibraryQuery{UserID: u.ID, Query: q, Sort: r.URL.Query().Get("sort"), Followed: show != "all"})
 	if err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	type row struct {
@@ -477,15 +501,15 @@ func (s *Server) followAction(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	id := mangaIDFrom(r.FormValue("id"))
 	if id == "" {
-		http.Error(w, "Bad manga ID", http.StatusBadRequest)
+		s.errorPage(w, r, http.StatusBadRequest, "Bad manga ID")
 		return
 	}
 	if err := s.addManga(r, id); err != nil {
-		http.Error(w, userMessage(err), http.StatusBadGateway)
+		s.errorPage(w, r, http.StatusBadGateway, userMessage(err))
 		return
 	}
 	if err := s.db.setFollow(u.ID, id, true); err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	s.dl.Check(id)
@@ -496,7 +520,7 @@ func (s *Server) unfollowAction(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	id := mangaIDFrom(r.FormValue("id"))
 	if id == "" {
-		http.Error(w, "Bad manga ID", http.StatusBadRequest)
+		s.errorPage(w, r, http.StatusBadRequest, "Bad manga ID")
 		return
 	}
 	s.db.setFollow(u.ID, id, false)
@@ -518,7 +542,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	m, err := s.db.manga(r.PathValue("id"), u.ID)
 	if err != nil {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	all, _ := s.db.chapters(m.ID)
@@ -587,7 +611,7 @@ func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
 	id, lang := r.PathValue("id"), r.FormValue("lang")
 	chapters, err := s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) AND (?='' OR c.lang=?) ORDER BY c.published`, id, lang, lang)
 	if err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	n := 0
@@ -632,7 +656,7 @@ func (s *Server) mangaDeleteFiles(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.dl.deleteChapterFiles(c); err != nil {
-			http.Error(w, userMessage(err), http.StatusInternalServerError)
+			s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 			return
 		}
 		n++
@@ -643,7 +667,7 @@ func (s *Server) mangaDeleteFiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) chapterDownload(w http.ResponseWriter, r *http.Request) {
 	c, err := s.db.chapter(r.PathValue("id"))
 	if err != nil {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	if c.State != stateDone {
@@ -656,7 +680,7 @@ func (s *Server) chapterDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) chapterCancel(w http.ResponseWriter, r *http.Request) {
 	c, err := s.db.chapter(r.PathValue("id"))
 	if err != nil {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	if c.State == stateQueued || c.State == stateFailed {
@@ -669,11 +693,11 @@ func (s *Server) chapterCancel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) chapterDelete(w http.ResponseWriter, r *http.Request) {
 	c, err := s.db.chapter(r.PathValue("id"))
 	if err != nil {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	if err := s.dl.deleteChapterFiles(c); err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	back(w, r, "/manga/"+c.MangaID, "")
@@ -686,7 +710,7 @@ const historyPage = 50
 func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 	queue, err := s.db.queue()
 	if err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	var queued, failed int
@@ -703,7 +727,7 @@ func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	history, err := s.db.history(historyPage, (page-1)*historyPage)
 	if err != nil {
-		http.Error(w, userMessage(err), http.StatusInternalServerError)
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
 	var total int64
@@ -801,8 +825,7 @@ func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsSignOut(w http.ResponseWriter, r *http.Request) {
-	s.db.Exec(`DELETE FROM sessions WHERE hash=? AND user_id=?`, r.FormValue("hash"), currentUser(r).ID)
-	s.db.signedOut.notify()
+	s.db.signOutDevice(currentUser(r).ID, r.FormValue("hash"))
 	back(w, r, "/settings", "Signed out.")
 }
 
@@ -894,18 +917,23 @@ func (s *Server) settingsDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.renderSettings(w, r, "You can't delete your own account.")
 		return
 	}
-	// One statement, so two admins deleting each other can't both succeed.
-	res, err := s.db.Exec(`DELETE FROM users WHERE id=? AND (admin=0 OR (SELECT count(*) FROM users WHERE admin=1) > 1)`, id)
+	deleted, err := s.db.deleteUser(id)
 	if err != nil {
 		s.renderSettings(w, r, userMessage(err))
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !deleted {
 		s.renderSettings(w, r, "Can't delete the last admin.")
 		return
 	}
-	s.db.signedOut.notify()
 	back(w, r, "/settings", "User deleted.")
+}
+
+// downloadingManga reports whether a chapter of the manga page's manga is
+// downloading.
+func (s *Server) downloadingManga(r *http.Request) bool {
+	cur := s.dl.Status().Current
+	return cur != nil && cur.MangaID == r.PathValue("id")
 }
 
 func (s *Server) routes() http.Handler {
@@ -921,7 +949,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /search", s.web(false, s.searchPage))
 	mux.HandleFunc("POST /follow", s.web(false, s.followAction))
 	mux.HandleFunc("POST /unfollow", s.web(false, s.unfollowAction))
-	mux.HandleFunc("GET /manga/{id}", s.web(false, s.live(s.mangaPage)))
+	mux.HandleFunc("GET /manga/{id}", s.web(false, s.live(s.mangaPage, s.downloadingManga)))
 	mux.HandleFunc("POST /manga/{id}/check", s.web(false, s.mangaCheck))
 	mux.HandleFunc("POST /manga/{id}/download-all", s.web(false, s.mangaDownloadAll))
 	mux.HandleFunc("POST /manga/{id}/languages", s.web(false, s.mangaLanguages))
@@ -931,7 +959,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /chapter/{id}/download", s.web(false, s.chapterDownload))
 	mux.HandleFunc("POST /chapter/{id}/cancel", s.web(false, s.chapterCancel))
 	mux.HandleFunc("POST /chapter/{id}/delete", s.web(true, s.chapterDelete))
-	mux.HandleFunc("GET /downloads", s.web(false, s.live(s.downloadsPage)))
+	mux.HandleFunc("GET /downloads", s.web(false, s.live(s.downloadsPage, func(*http.Request) bool { return true })))
 	mux.HandleFunc("POST /downloads/check", s.web(false, s.downloadsCheck))
 	mux.HandleFunc("POST /downloads/retry", s.web(false, s.downloadsRetry))
 	mux.HandleFunc("GET /settings", s.web(false, s.settingsPage))
@@ -953,5 +981,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/chapters/{id}/pages", s.api(s.apiPages))
 	mux.HandleFunc("GET /api/v1/tags", s.api(s.apiTags))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	// Anything else. The header shows when signed in.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if u, err := s.db.sessionUser(sessionToken(r)); err == nil {
+			r = r.WithContext(context.WithValue(r.Context(), userKey, u))
+		}
+		s.notFound(w, r)
+	})
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
+	})
 	return mux
 }

@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS mdx_accounts(
 
 type DB struct {
 	*sql.DB
-	signedOut changes // sessions were removed, so live streams re-check theirs
+	signedOut changes // sessions or users were removed, so live streams re-check theirs
 }
 
 func openDB(path string) (*DB, error) {
@@ -129,6 +129,19 @@ func openDB(path string) (*DB, error) {
 }
 
 func now() int64 { return time.Now().Unix() }
+
+// usersChanged wraps an Exec that removes sessions or users. When it removed
+// any, live streams wake and re-check theirs.
+func (db *DB) usersChanged(res sql.Result, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		db.signedOut.notify()
+	}
+	return n, nil
+}
 
 // Settings
 
@@ -198,6 +211,13 @@ func (db *DB) userByID(id int64) (*User, error) {
 		return nil, err
 	}
 	return u, nil
+}
+
+// deleteUser deletes a user unless they're the last admin. One statement, so
+// two admins deleting each other can't both succeed.
+func (db *DB) deleteUser(id int64) (bool, error) {
+	n, err := db.usersChanged(db.Exec(`DELETE FROM users WHERE id=? AND (admin=0 OR (SELECT count(*) FROM users WHERE admin=1) > 1)`, id))
+	return n > 0, err
 }
 
 func (db *DB) users() ([]User, error) {
