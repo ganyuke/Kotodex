@@ -61,7 +61,7 @@ Edit `KOTODEX_ADMIN_PASSWORD` in `compose.yaml`, then:
 docker compose up -d
 ```
 
-Downloads and the database end up in the `kotodex-data` volume. To use the prebuilt image instead of building it, replace `build: ./server` with `image: ghcr.io/ganyuke/kotodex`.
+Downloads and the database end up in the `kotodex-data` volume. To build the image yourself instead, replace the `image:` line with `build: ./server`.
 
 ### With systemd
 
