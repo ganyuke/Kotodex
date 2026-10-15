@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func testServer(t *testing.T) (*Server, *httptest.Server) {
@@ -457,5 +459,57 @@ func TestFollowsDefaultToMangaDex(t *testing.T) {
 	s.db.QueryRow(`SELECT count(*) FROM follow_choices WHERE user_id=? AND following=0`, uid).Scan(&n)
 	if n != 0 {
 		t.Fatal("unfollow choices mean nothing without MangaDex")
+	}
+}
+
+func TestLongPasswords(t *testing.T) {
+	s, _ := testServer(t)
+	long := strings.Repeat("ア", 50) // 150 bytes, past bcrypt's 72
+	uid, err := s.db.createUser("mio", long, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.checkPassword("mio", long); err != nil {
+		t.Fatalf("long password: %v", err)
+	}
+	if _, err := s.db.checkPassword("mio", long[:72]); err == nil {
+		t.Fatal("first 72 bytes alone signed in")
+	}
+	if err := s.db.setPassword(uid, long+"x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.checkPassword("mio", long+"x"); err != nil {
+		t.Fatalf("changed long password: %v", err)
+	}
+}
+
+func TestBcryptPasswordsUpgrade(t *testing.T) {
+	s, _ := testServer(t)
+	uid, _ := s.db.createUser("mio", "pw", false)
+	old, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	s.db.Exec(`UPDATE users SET pass=? WHERE id=?`, string(old), uid)
+	token, _ := s.db.createSession(uid, "web", "test")
+
+	if _, err := s.db.checkPassword("mio", "nope"); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	var hash string
+	s.db.QueryRow(`SELECT pass FROM users WHERE id=?`, uid).Scan(&hash)
+	if hash != string(old) {
+		t.Fatal("hash changed after a wrong password")
+	}
+
+	if _, err := s.db.checkPassword("mio", "pw"); err != nil {
+		t.Fatalf("bcrypt password: %v", err)
+	}
+	s.db.QueryRow(`SELECT pass FROM users WHERE id=?`, uid).Scan(&hash)
+	if !strings.HasPrefix(hash, "$argon2id$") {
+		t.Fatalf("not upgraded: %s", hash)
+	}
+	if _, err := s.db.checkPassword("mio", "pw"); err != nil {
+		t.Fatalf("after upgrade: %v", err)
+	}
+	if _, err := s.db.sessionUser(token); err != nil {
+		t.Fatal("upgrade signed the user out")
 	}
 }
