@@ -27,8 +27,8 @@ import java.util.Locale
  * types that cross process boundaries with their message.
  *
  * The provider has to be exported for Kotatsu to find it, so it checks who
- * is asking. Kotatsu is always answered. Any other app is refused until the
- * user allows it in the Kotodex app, which covers Kotatsu forks.
+ * is asking. Kotatsu and Futon are always answered. Any other app is refused
+ * until the user allows it in the Kotodex app, which covers other Kotatsu forks.
  */
 class MangaProvider : ContentProvider() {
 
@@ -67,7 +67,7 @@ class MangaProvider : ContentProvider() {
 
     private fun checkCaller() {
         val caller = callingPackage ?: throw SecurityException("Kotodex couldn't tell which app is asking")
-        if (caller == context!!.packageName || caller in KOTATSU_PACKAGES || caller in prefs.allowedApps) return
+        if (caller == context!!.packageName || caller in READER_PACKAGES || caller in prefs.allowedApps) return
         prefs.request(caller)
         throw SecurityException("Open the Kotodex app and allow $caller")
     }
@@ -212,8 +212,9 @@ class MangaProvider : ContentProvider() {
         throw UnsupportedOperationException()
 
     companion object {
-        /** Kotatsu's release, debug, and nightly builds. */
-        val KOTATSU_PACKAGES = setOf("org.koitharu.kotatsu", "org.koitharu.kotatsu.debug", "org.koitharu.kotatsu.nightly")
+        /** Release, debug, and nightly builds of Kotatsu and Futon. */
+        val READER_PACKAGES = listOf("org.koitharu.kotatsu", "io.github.landwarderer.futon")
+            .flatMap { listOf(it, "$it.debug", "$it.nightly") }.toSet()
 
         private val MANGA_COLUMNS = arrayOf(
             "id", "title", "alt_title", "url", "public_url", "rating", "is_nsfw", "cover_url",

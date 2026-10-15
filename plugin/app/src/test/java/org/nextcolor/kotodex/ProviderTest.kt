@@ -162,6 +162,15 @@ class ProviderTest {
         assertEquals(1, query("$auth/manga").count)
     }
 
+    @Test fun futonNeedsNoApproval() {
+        val prefs = Prefs(RuntimeEnvironment.getApplication())
+        for (pkg in listOf("io.github.landwarderer.futon", "io.github.landwarderer.futon.debug", "io.github.landwarderer.futon.nightly")) {
+            callAs(pkg)
+            assertEquals(1, query("$auth/manga").count)
+        }
+        assertTrue(prefs.requestedApps.isEmpty())
+    }
+
     @Test fun stableIds() {
         assertEquals(MangaProvider.stableId("manga:m1"), MangaProvider.stableId("manga:m1"))
         assertTrue(MangaProvider.stableId("manga:m1") != MangaProvider.stableId("manga:m2"))

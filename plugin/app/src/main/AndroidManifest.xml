@@ -25,7 +25,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Kotatsu lists every provider with this action as a manga source. -->
+        <!-- Kotatsu lists every provider with its action as a manga source. Futon renamed the action. -->
         <provider
             android:name=".MangaProvider"
             android:authorities="${applicationId}.manga"
@@ -33,6 +33,7 @@
             android:label="@string/app_name">
             <intent-filter>
                 <action android:name="app.kotatsu.parser.PROVIDE_MANGA" />
+                <action android:name="app.futon.parser.PROVIDE_MANGA" />
             </intent-filter>
         </provider>
     </application>

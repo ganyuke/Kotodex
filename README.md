@@ -27,7 +27,7 @@ Start the server and sign in at `http://<server>:8080` as `admin`. Search MangaD
 To read on your phone, install the plugin APK, open it, and sign in with the server address and your Kotodex username and password. Kotodex then shows up pinned at the top of Explore in Kotatsu.
 
 - If you want to see only your own follows in Kotatsu instead of everyone's, turn on "Only manga I follow" in the plugin app.
-- If you use a Kotatsu fork, it gets an error the first time it opens Kotodex. Open the plugin app and press Allow next to it. Kotodex only answers apps you allowed, plus Kotatsu itself.
+- Futon works the same as Kotatsu. If you use another Kotatsu fork, it gets an error the first time it opens Kotodex. Open the plugin app and press Allow next to it. Kotodex only answers apps you allowed, plus Kotatsu and Futon.
 - Changing your password signs out every device, including Kotatsu. Sign in again in the plugin app afterwards.
 - Kotodex signs out devices that go unused for 90 days. If you haven't opened Kotodex in Kotatsu for that long, sign in again in the plugin app.
 - Linking a MangaDex account needs a personal API client. Create one on mangadex.org under Settings, API Clients, and wait for it to be approved.
