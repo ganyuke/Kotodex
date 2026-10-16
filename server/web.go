@@ -674,12 +674,12 @@ func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
-	n := 0
+	n, at := 0, now()
 	for _, c := range chapters {
 		if s.db.hasChapterNumber(c.MangaID, c.Lang, c.Volume, c.Number) {
 			continue
 		}
-		s.db.setChapterState(c.ID, stateQueued)
+		s.db.queueChapter(c.ID, at)
 		n++
 	}
 	s.dl.Wake()
@@ -731,7 +731,7 @@ func (s *Server) chapterDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.State != stateDone {
-		s.db.setChapterState(c.ID, stateQueued)
+		s.db.queueChapter(c.ID, now())
 		s.dl.Wake()
 	}
 	back(w, r, "/manga/"+c.MangaID, "")
@@ -815,7 +815,7 @@ func (s *Server) downloadsCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) downloadsRetry(w http.ResponseWriter, r *http.Request) {
-	res, _ := s.db.Exec(`UPDATE chapters SET state=1, tries=0, error='' WHERE state=3`)
+	res, _ := s.db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE state=3`, now())
 	n, _ := res.RowsAffected()
 	s.dl.Wake()
 	back(w, r, "/downloads", plural(int(n), "chapter")+" added back to downloads.")

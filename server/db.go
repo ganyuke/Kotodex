@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS chapters(
 	error TEXT NOT NULL DEFAULT '',
 	files TEXT NOT NULL DEFAULT '[]',
 	size INTEGER NOT NULL DEFAULT 0,
-	downloaded INTEGER NOT NULL DEFAULT 0
+	downloaded INTEGER NOT NULL DEFAULT 0,
+	queued INTEGER NOT NULL DEFAULT 0 -- when it was last queued, so downloads go first come, first served
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sessions_sid ON sessions(sid);
 CREATE INDEX IF NOT EXISTS chapters_manga ON chapters(manga_id);
@@ -124,6 +125,16 @@ func openDB(path string) (*DB, error) {
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	// Older databases lack chapters.queued. Chapters already waiting keep
+	// their old order, which went by upload date.
+	var hasQueued int
+	db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name='queued'`).Scan(&hasQueued)
+	if hasQueued == 0 {
+		if _, err := db.Exec(`ALTER TABLE chapters ADD COLUMN queued INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return nil, fmt.Errorf("add chapters.queued: %w", err)
+		}
+		db.Exec(`UPDATE chapters SET queued=published WHERE state IN (1,3)`)
 	}
 	return &DB{DB: db}, nil
 }
@@ -677,6 +688,7 @@ type Chapter struct {
 	Files      []string
 	Size       int64
 	Downloaded int64
+	Queued     int64 // only set for insertChapter
 
 	MangaTitle string // filled by queue queries
 }
@@ -715,6 +727,11 @@ func (db *DB) queryChapters(query string, args ...any) ([]*Chapter, error) {
 // Numbers are text on MangaDex ("10.5", "" for oneshots), so cast for sorting.
 const chapterOrder = `CAST(NULLIF(c.volume,'') AS REAL) IS NULL, CAST(NULLIF(c.volume,'') AS REAL), CAST(NULLIF(c.number,'') AS REAL), c.published`
 
+// queueOrder downloads chapters in the order they were queued. Chapters queued
+// at the same time stay together by manga and go in reading order. Chapters
+// that already failed once wait until the rest are done.
+const queueOrder = `c.tries, c.queued, c.manga_id, ` + chapterOrder
+
 func (db *DB) chapters(mangaID string) ([]*Chapter, error) {
 	return db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? ORDER BY `+chapterOrder, mangaID)
 }
@@ -729,7 +746,7 @@ func (db *DB) chapter(id string) (*Chapter, error) {
 
 func (db *DB) queue() ([]*Chapter, error) {
 	rows, err := db.Query(`SELECT ` + chapterCols + `, m.title FROM chapters c JOIN manga m ON m.id=c.manga_id
-		WHERE c.state IN (1,3) ORDER BY c.state, c.published LIMIT 500`)
+		WHERE c.state IN (1,3) ORDER BY c.state, ` + queueOrder + ` LIMIT 500`)
 	if err != nil {
 		return nil, err
 	}
@@ -769,15 +786,15 @@ func (db *DB) history(limit, offset int) ([]*Chapter, error) {
 }
 
 func (db *DB) nextQueued() (*Chapter, error) {
-	return scanChapter(db.QueryRow(`SELECT ` + chapterCols + ` FROM chapters c WHERE c.state=1 ORDER BY c.tries, c.published LIMIT 1`))
+	return scanChapter(db.QueryRow(`SELECT ` + chapterCols + ` FROM chapters c WHERE c.state=1 ORDER BY ` + queueOrder + ` LIMIT 1`))
 }
 
 // insertChapter adds a chapter MangaDex reported. Existing rows only get their
 // metadata refreshed and keep their download state.
 func (db *DB) insertChapter(c *Chapter) (bool, error) {
-	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state)
-		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
-		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State)
+	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued)
 	if err != nil {
 		return false, err
 	}
@@ -804,5 +821,12 @@ func (db *DB) hasChapterNumber(mangaID, lang, volume, number string) bool {
 
 func (db *DB) setChapterState(id string, state int) error {
 	_, err := db.Exec(`UPDATE chapters SET state=?, tries=0, error='' WHERE id=?`, state, id)
+	return err
+}
+
+// queueChapter puts a chapter at the end of the queue. Chapters queued by one
+// action share its time, so they download together in reading order.
+func (db *DB) queueChapter(id string, at int64) error {
+	_, err := db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE id=?`, at, id)
 	return err
 }

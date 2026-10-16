@@ -848,7 +848,7 @@ func TestLiveUpdates(t *testing.T) {
 		t.Fatalf("first event: %s", ev)
 	}
 
-	s.db.setChapterState(chapter1, stateQueued)
+	s.db.queueChapter(chapter1, now())
 	s.dl.Wake()
 	if ev, err = st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
 		t.Fatalf("after queueing: %v %s", err, ev)
@@ -1067,7 +1067,7 @@ func TestLiveOutlivesReadTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(3 * srv.ReadTimeout)
-	s.db.setChapterState(chapter1, stateQueued)
+	s.db.queueChapter(chapter1, now())
 	s.dl.Wake()
 	if ev, err := st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
 		t.Fatalf("stream ended after the read timeout: %v %s", err, ev)
@@ -1260,5 +1260,80 @@ func TestErrorsArePages(t *testing.T) {
 	res, body := get("/api/v1/nope", false)
 	if res.StatusCode != http.StatusNotFound || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
 		t.Fatalf("api: %d %s %s", res.StatusCode, res.Header.Get("Content-Type"), body)
+	}
+}
+
+func TestQueueOrder(t *testing.T) {
+	s, _ := testServer(t)
+	seed(t, s)
+	const mangaB = "0d1f6a52-9c1e-4f43-9a37-3a8c0f1f2b11"
+	s.db.upsertManga(&Manga{ID: mangaB, Title: "Bocchi"})
+	// Series A is queued first. Its chapters were uploaded out of order.
+	s.db.insertChapter(&Chapter{ID: "a2", MangaID: mangaA, Volume: "1", Number: "2", Lang: "en", Published: 50})
+	s.db.insertChapter(&Chapter{ID: "a1", MangaID: mangaA, Volume: "1", Number: "1", Lang: "en", Published: 900})
+	s.db.insertChapter(&Chapter{ID: "a3", MangaID: mangaA, Volume: "2", Number: "3", Lang: "en", Published: 60})
+	// Series B is queued later, though its chapters are older.
+	s.db.insertChapter(&Chapter{ID: "b1", MangaID: mangaB, Number: "1", Lang: "en", Published: 1})
+	s.db.insertChapter(&Chapter{ID: "b2", MangaID: mangaB, Number: "2", Lang: "en", Published: 2})
+	for _, id := range []string{"a2", "a1", "a3"} {
+		s.db.queueChapter(id, 1000)
+	}
+	for _, id := range []string{"b2", "b1"} {
+		s.db.queueChapter(id, 2000)
+	}
+	// A new chapter of A found after B was queued goes after B.
+	s.db.insertChapter(&Chapter{ID: "a4", MangaID: mangaA, Volume: "2", Number: "4", Lang: "en", Published: 3000, State: stateQueued, Queued: 3000})
+
+	want := "a1 a2 a3 b1 b2 a4"
+	queue, err := s.db.queue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, c := range queue {
+		ids = append(ids, c.ID)
+	}
+	if got := strings.Join(ids, " "); got != want {
+		t.Fatalf("queue page: %s, want %s", got, want)
+	}
+	ids = nil
+	for {
+		c, err := s.db.nextQueued()
+		if err != nil {
+			break
+		}
+		ids = append(ids, c.ID)
+		s.db.setChapterState(c.ID, stateDone)
+	}
+	if got := strings.Join(ids, " "); got != want {
+		t.Fatalf("download order: %s, want %s", got, want)
+	}
+}
+
+func TestQueuedColumnAdded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`ALTER TABLE chapters DROP COLUMN queued`,
+		`INSERT INTO manga(id,title,added) VALUES('` + mangaA + `','Akanabe',1)`,
+		`INSERT INTO chapters(id,manga_id,lang,published,state) VALUES('old','` + mangaA + `','en',123,1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	db, err = openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var queued int64
+	if err := db.QueryRow(`SELECT queued FROM chapters WHERE id='old'`).Scan(&queued); err != nil || queued != 123 {
+		t.Fatalf("queued = %d, %v", queued, err)
 	}
 }

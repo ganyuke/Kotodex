@@ -210,7 +210,7 @@ func (d *Downloader) checkManga(ctx context.Context, m *Manga) {
 	wanted := d.db.wantedLangs(m.ID)
 
 	// Oldest first, so duplicate detection keeps the first upload.
-	queued := 0
+	queued, at := 0, now()
 	for i := len(feed) - 1; i >= 0; i-- {
 		if !feed[i].readable() {
 			continue
@@ -219,6 +219,7 @@ func (d *Downloader) checkManga(ctx context.Context, m *Manga) {
 		c.State = stateSkipped
 		if !initial && wanted[c.Lang] && c.Published >= checked-24*3600 && !d.db.hasChapterNumber(m.ID, c.Lang, c.Volume, c.Number) {
 			c.State = stateQueued
+			c.Queued = at
 		}
 		inserted, err := d.db.insertChapter(c)
 		if err != nil {
