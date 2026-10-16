@@ -1,0 +1,5 @@
+See what everyone reads, with profiles, an Activity tab, and progress on manga pages, by pointing Kotatsu's sync at Kotodex.
+Pick who sees your reading in Settings.
+The plugin app shows the email to sign in to Kotatsu sync with.
+Hide, show, and reorder chapter table columns. Languages have flags.
+In Firefox, clicking a link to the page you're on no longer sends you back to it.
