@@ -119,11 +119,17 @@ func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
 	log := year[:min(profileLog, len(year))]
 	s.fillSessions(u, ci, log)
 	data["Log"], data["LogMore"] = log, len(year) > profileLog || s.db.readBefore(u.ID, p.ID, yearAgo)
+	// A session that started more than a gap after the cut can't have been
+	// cut short, so it can be deleted whole from here.
+	whole := true
+	for _, rs := range log {
+		whole = whole && rs.Start-yearAgo > sessionGap.Milliseconds()
+	}
+	data["LogTable"] = logTable{Rows: log, Delete: u.ID == p.ID && whole, Next: r.URL.RequestURI()}
 	unfinished := false
-	reading, readingCount, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &unfinished, Limit: profileReading})
+	reading, _, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &unfinished, Limit: profileReading, NoCount: true})
 	s.fillProgress(u, ci, reading)
-	finished := true
-	_, finishedCount, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &finished, CountOnly: true})
+	readingCount, finishedCount, _ := s.db.progressCounts(u.ID, p.ID)
 	data["Reading"], data["ReadingCount"], data["FinishedCount"] = reading, readingCount, finishedCount
 	lists, _ := s.db.lists(u.ID, p.ID)
 	for _, l := range lists {
@@ -150,10 +156,7 @@ func (s *Server) readingPage(w http.ResponseWriter, r *http.Request) {
 	tab := q.Get("tab")
 	finished := tab == "finished"
 	query := PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &finished, Query: strings.TrimSpace(q.Get("q")), Sort: q.Get("sort")}
-	notFinished := false
-	yes := true
-	_, inProgress, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &notFinished, CountOnly: true})
-	_, done, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &yes, CountOnly: true})
+	inProgress, done, _ := s.db.progressCounts(u.ID, p.ID)
 	query.CountOnly = true
 	_, total, _ := s.db.progress(query)
 	pg, offset := pager(r, total)
@@ -227,7 +230,36 @@ func (s *Server) logPage(w http.ResponseWriter, r *http.Request) {
 	s.fillSessions(u, newChapterIndex(s.db), rows)
 	s.render(w, r, "log", pageData{Title: p.Name + " / Reading log", Nav: "activity", Data: map[string]any{
 		"Person": p, "Path": peoplePath(p), "Rows": rows, "Pager": pg,
+		"Log": logTable{Rows: rows, Delete: u.ID == p.ID, Next: r.URL.RequestURI()},
 	}})
+}
+
+// logTable is a reading log as the "log" template shows it. Delete adds a
+// button to each row, only for your own reading and when no session is cut
+// short.
+type logTable struct {
+	Rows   []*ReadSession
+	Delete bool
+	Next   string
+}
+
+// deleteReading deletes one session of your own reading, everything saved
+// for that manga from its start to its end.
+func (s *Server) deleteReading(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	manga, err1 := strconv.ParseInt(r.FormValue("manga"), 10, 64)
+	start, err2 := strconv.ParseInt(r.FormValue("start"), 10, 64)
+	end, err3 := strconv.ParseInt(r.FormValue("end"), 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		s.errorPage(w, r, http.StatusBadRequest, "That reading couldn't be found.")
+		return
+	}
+	if _, err := s.db.Exec(`DELETE FROM reading_events WHERE user_id=? AND manga_id=? AND at BETWEEN ? AND ?`, u.ID, manga, start, end); err != nil {
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+		return
+	}
+	s.dl.Changed()
+	back(w, r, "/people/"+url.PathEscape(u.Name)+"/log", "")
 }
 
 func (s *Server) followingPage(w http.ResponseWriter, r *http.Request) {

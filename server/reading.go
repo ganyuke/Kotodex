@@ -258,9 +258,10 @@ type PlaceQuery struct {
 	Offset    int
 	Limit     int
 	CountOnly bool
+	NoCount   bool // skip counting, the total comes back 0
 }
 
-func (db *DB) progress(q PlaceQuery) ([]*Place, int, error) {
+func progressFrom(q PlaceQuery) (string, []any) {
 	where := []string{`h.deleted_at=0`, shareFilter("h.user_id", "sm.source")}
 	args := shareArgs(q.Viewer)
 	if q.Owner != 0 {
@@ -283,12 +284,27 @@ func (db *DB) progress(q PlaceQuery) ([]*Place, int, error) {
 		where = append(where, `sm.title LIKE @q ESCAPE '\'`)
 		args = append(args, sql.Named("q", "%"+likeEscape(q.Query)+"%"))
 	}
-	from := ` FROM sync_history h JOIN users us ON us.id=h.user_id
+	return ` FROM sync_history h JOIN users us ON us.id=h.user_id
 		JOIN sync_manga sm ON sm.user_id=h.user_id AND sm.id=h.manga_id
-		WHERE ` + strings.Join(where, " AND ")
+		WHERE ` + strings.Join(where, " AND "), args
+}
+
+// progressCounts counts what owner is reading and has finished, as the
+// viewer may see it.
+func (db *DB) progressCounts(viewer, owner int64) (reading, finished int, err error) {
+	from, args := progressFrom(PlaceQuery{Viewer: viewer, Owner: owner})
+	err = db.QueryRow(`SELECT coalesce(sum(h.percent<@done),0),coalesce(sum(h.percent>=@done),0)`+from,
+		append(args, sql.Named("done", finishedAt))...).Scan(&reading, &finished)
+	return
+}
+
+func (db *DB) progress(q PlaceQuery) ([]*Place, int, error) {
+	from, args := progressFrom(q)
 	var total int
-	if err := db.QueryRow(`SELECT count(*)`+from, args...).Scan(&total); err != nil {
-		return nil, 0, err
+	if !q.NoCount {
+		if err := db.QueryRow(`SELECT count(*)`+from, args...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
 	}
 	if q.CountOnly {
 		return nil, total, nil
@@ -843,7 +859,6 @@ func heatmap(list []*ReadSession, now time.Time) Heatmap {
 				}
 				if readOn[key] {
 					h.DaysOn++
-					hd.Level = max(hd.Level, 1)
 					hd.Tip = day.Format("Jan 2") + ": " + minutes(t)
 					if t == 0 {
 						hd.Tip = day.Format("Jan 2") + ": read"

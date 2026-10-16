@@ -16,7 +16,7 @@ var langFlags = map[string]string{
 // langFlag returns the flag emoji for a language code, or "".
 func langFlag(code string) string {
 	cc, ok := langFlags[code]
-	if !ok || len(cc) != 2 {
+	if !ok || len(cc) != 2 || cc[0] < 'A' || cc[0] > 'Z' || cc[1] < 'A' || cc[1] > 'Z' {
 		return ""
 	}
 	// Two regional indicator symbols make a flag.

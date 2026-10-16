@@ -22,10 +22,11 @@
 {{end}}
 
 {{define "log"}}
+{{$t := .}}
 <table class="list">
-  <thead><tr><th>Day</th><th>Time</th><th>Manga</th><th>Source</th><th>Read</th><th class="num">Reading time</th></tr></thead>
+  <thead><tr><th>Day</th><th>Time</th><th>Manga</th><th>Source</th><th>Read</th><th class="num">Reading time</th>{{if $t.Delete}}<th></th>{{end}}</tr></thead>
   <tbody>
-  {{range .}}
+  {{range $t.Rows}}
   <tr>
     <td class="nowrap">{{dateMs .End}}</td>
     <td class="nowrap">{{if eq .Start .End}}{{clock .End}}{{else}}{{clock .Start}} to {{clock .End}}{{end}}</td>
@@ -33,6 +34,9 @@
     <td>{{.SourceName}}</td>
     <td>{{.What}}</td>
     <td class="num">{{if ne .Start .End}}{{minutes .Duration}}{{end}}</td>
+    {{if $t.Delete}}<td class="actions"><form method="post" action="/reading/delete" hx-confirm="Delete this reading of {{.Title}}?">
+      <input type="hidden" name="manga" value="{{.SyncedManga.ID}}"><input type="hidden" name="start" value="{{.Start}}"><input type="hidden" name="end" value="{{.End}}">
+      <input type="hidden" name="next" value="{{$t.Next}}"><button class="small link danger">Delete</button></form></td>{{end}}
   </tr>
   {{end}}
   </tbody>

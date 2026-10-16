@@ -60,7 +60,7 @@
     <h2>Reading log</h2>
     {{if $d.LogMore}}<a class="push" href="{{$d.Path}}/log">Show all</a>{{end}}
   </div>
-  {{if $d.Log}}{{template "log" $d.Log}}{{else if $d.LogMore}}<p class="empty small">No reading in the past year.</p>{{else}}<p class="empty small">No reading yet.</p>{{end}}
+  {{if $d.Log}}{{template "log" $d.LogTable}}{{else if $d.LogMore}}<p class="empty small">No reading in the past year.</p>{{else}}<p class="empty small">No reading yet.</p>{{end}}
 </div>
 <aside>
   <div class="row section-head">

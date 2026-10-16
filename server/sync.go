@@ -269,13 +269,6 @@ func (db *DB) saveHistory(userID int64, rows []syncHistory) error {
 			return fmt.Errorf("save history: %w", err)
 		}
 	}
-	// Removing a manga from history in the app also removes its reading from
-	// Kotodex, up to when it was removed. Reading it again later starts fresh.
-	_, err := db.Exec(`DELETE FROM reading_events WHERE user_id=?1 AND EXISTS(SELECT 1 FROM sync_history h
-		WHERE h.user_id=?1 AND h.manga_id=reading_events.manga_id AND h.deleted_at>0 AND reading_events.at<=h.deleted_at)`, userID)
-	if err != nil {
-		return fmt.Errorf("remove reading: %w", err)
-	}
 	return nil
 }
 

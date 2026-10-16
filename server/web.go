@@ -356,6 +356,17 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p p
 	}
 }
 
+// pageQuery is the page's own query string, without the live stream's
+// marker, for links and redirects back to the page.
+func pageQuery(r *http.Request) string {
+	q := r.URL.Query()
+	if !q.Has("live") {
+		return r.URL.RawQuery
+	}
+	q.Del("live")
+	return q.Encode()
+}
+
 // localPath accepts only paths on this site. Browsers read "/\x" like
 // "//x", another site, so backslashes are refused too. They also drop tabs
 // and newlines from URLs ("/\t/x" becomes "//x"), which url.Parse rejects.
@@ -674,7 +685,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current, "Reading": reading,
 		"AllColumns": allCols, "Columns": cols,
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
-		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": r.URL.RawQuery,
+		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": pageQuery(r),
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
 		"FollowCustom": linked && s.db.followChoice(u.ID, m.ID),
 	}})
@@ -972,7 +983,7 @@ func (s *Server) settingsServer(w http.ResponseWriter, r *http.Request) {
 		otherCovers = "1"
 	}
 	coverLimit, err := strconv.Atoi(strings.TrimSpace(r.FormValue("cover_limit")))
-	if err != nil || coverLimit < 0 {
+	if err != nil || coverLimit < 0 || coverLimit > maxCoverLimitMB {
 		s.renderSettings(w, r, "Enter the space for covers in MB, or 0 for no limit.")
 		return
 	}
@@ -1070,6 +1081,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /people/{name}/reading", s.web(false, s.readingPage))
 	mux.HandleFunc("GET /people/{name}/lists/{id}", s.web(false, s.listPage))
 	mux.HandleFunc("GET /people/{name}/log", s.web(false, s.logPage))
+	mux.HandleFunc("POST /reading/delete", s.web(false, s.deleteReading))
 	mux.HandleFunc("GET /people/{name}/following", s.web(false, s.followingPage))
 	mux.HandleFunc("GET /downloads", s.web(false, s.live(s.downloadsPage, func(*http.Request) bool { return true })))
 	mux.HandleFunc("POST /downloads/check", s.web(false, s.downloadsCheck))

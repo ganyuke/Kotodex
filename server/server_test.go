@@ -17,8 +17,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1504,10 +1506,10 @@ func TestSyncHistory(t *testing.T) {
 		t.Errorf("newer progress: chapter %d, %d events", chapter, events())
 	}
 	// Removing it on the phone sticks, even with the same save time, and
-	// takes its reading out of the log.
+	// keeps its reading in the log.
 	syncPost(t, ts, token, "/resource/history", `{"history":[`+historyRow(-5, 12, 3000, 4000, 1)+`],"timestamp":1}`)
 	s.db.QueryRow(`SELECT deleted_at FROM sync_history WHERE user_id=? AND manga_id=-5`, uid).Scan(&deleted)
-	if deleted != 4000 || events() != 1 {
+	if deleted != 4000 || events() != 3 {
 		t.Errorf("removal: deleted_at %d, %d events", deleted, events())
 	}
 
@@ -1519,7 +1521,7 @@ func TestSyncHistory(t *testing.T) {
 	if code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+strings.Join(rows, ",")+`],"timestamp":1}`); code != http.StatusOK {
 		t.Fatalf("big upload: %d %s", code, b)
 	}
-	if events() != 451 {
+	if events() != 453 {
 		t.Errorf("events after big upload = %d", events())
 	}
 
@@ -1851,6 +1853,12 @@ func TestLangFlag(t *testing.T) {
 			t.Errorf("langFlag(%s) = %q, want %q", code, got, want)
 		}
 	}
+	// A wrong code in the table shows no flag rather than junk.
+	langFlags["zz"] = "gb"
+	defer delete(langFlags, "zz")
+	if got := langFlag("zz"); got != "" {
+		t.Errorf("lowercase code gave %q", got)
+	}
 }
 
 func TestChapterColumns(t *testing.T) {
@@ -1869,5 +1877,166 @@ func TestChapterColumns(t *testing.T) {
 	}
 	if got := strings.Join(names, ","); got != "status,lang,title,date,pages,you" || len(all) != 7 {
 		t.Errorf("shown = %s, all = %d", got, len(all))
+	}
+}
+
+func TestDeleteReading(t *testing.T) {
+	s, ts := testServer(t)
+	mio := seed(t, s)
+	syncReading(t, ts)
+	rin, _ := s.db.createUser("rin", "pw", false)
+	kid := stableID("manga:" + mangaA)
+	s.db.Exec(`INSERT INTO reading_events(user_id,manga_id,chapter_id,page,percent,at) VALUES(?,?,1,1,0.1,?)`, rin, kid, time.Now().UnixMilli())
+	events := func(uid int64) int {
+		var n int
+		s.db.QueryRow(`SELECT count(*) FROM reading_events WHERE user_id=?`, uid).Scan(&n)
+		return n
+	}
+	list, _ := s.db.readSessions(mio, mio, 0, mangaA)
+	if len(list) != 1 {
+		t.Fatalf("sessions = %d", len(list))
+	}
+	before := events(mio)
+	tk, _ := s.db.createSession(mio, "web", "test")
+	_, page := webGet(t, ts, tk, "/people/mio/log")
+	if !strings.Contains(page, `action="/reading/delete"`) {
+		t.Error("own log has no delete buttons")
+	}
+	if _, page := webGet(t, ts, tk, "/people/mio"); !strings.Contains(page, `action="/reading/delete"`) {
+		t.Error("own profile has no delete buttons")
+	}
+	rtk, _ := s.db.createSession(rin, "web", "test")
+	if _, page := webGet(t, ts, rtk, "/people/mio/log"); strings.Contains(page, `action="/reading/delete"`) {
+		t.Error("someone else's log has delete buttons")
+	}
+
+	post := func(token string, rs *ReadSession) int {
+		form := url.Values{"manga": {strconv.FormatInt(rs.SyncedManga.ID, 10)}, "start": {strconv.FormatInt(rs.Start, 10)},
+			"end": {strconv.FormatInt(rs.End, 10)}, "next": {"/people/mio/log"}}
+		req, _ := http.NewRequest("POST", ts.URL+"/reading/delete", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	// Someone else posting the same session deletes only their own reading.
+	all := &ReadSession{SyncedManga: SyncedManga{ID: kid}, Start: 0, End: time.Now().Add(time.Hour).UnixMilli()}
+	post(rtk, all)
+	if events(mio) != before || events(rin) != 0 {
+		t.Errorf("after rin's delete: mio %d (was %d), rin %d", events(mio), before, events(rin))
+	}
+	if code := post(tk, list[0]); code != http.StatusSeeOther {
+		t.Fatalf("delete: %d", code)
+	}
+	if list, _ := s.db.readSessions(mio, mio, 0, mangaA); len(list) != 0 {
+		t.Errorf("session still there: %d", len(list))
+	}
+	if events(mio) != before-list[0].Saves {
+		t.Errorf("events = %d, want only the session's %d gone from %d", events(mio), list[0].Saves, before)
+	}
+	// Reading right at the profile's one-year cut may be cut short there, so
+	// it can only be deleted from the full log.
+	s.db.Exec(`INSERT INTO reading_events(user_id,manga_id,chapter_id,page,percent,at) VALUES(?,77,5,0,0.5,?)`,
+		mio, time.Now().AddDate(0, 0, -371).Add(time.Minute).UnixMilli())
+	if _, page := webGet(t, ts, tk, "/people/mio"); strings.Contains(page, `action="/reading/delete"`) {
+		t.Error("profile offers to delete a session that may be cut short")
+	}
+	if _, page := webGet(t, ts, tk, "/people/mio/log"); !strings.Contains(page, `action="/reading/delete"`) {
+		t.Error("full log lost its delete buttons")
+	}
+}
+
+func TestCoversFull(t *testing.T) {
+	s, _ := testServer(t)
+	c := s.covers
+	var asked atomic.Int32
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		w.Write(pngBytes)
+	}))
+	defer site.Close()
+	c.client = site.Client()
+	s.db.setSetting("cover_limit", "1")
+	if !c.reserve(1 << 20) {
+		t.Fatal("couldn't fill the limit")
+	}
+	// Full: nothing is queued or downloaded, and it isn't remembered as a
+	// failure, so raising the limit lets it through.
+	c.want(site.URL + "/c.png")
+	if len(c.queue) != 0 {
+		t.Error("queued a cover with the storage full")
+	}
+	err := c.fetch(context.Background(), site.URL+"/c.png")
+	if !errors.Is(err, errCoversFull) || asked.Load() != 0 {
+		t.Errorf("fetch with storage full: %v, %d requests", err, asked.Load())
+	}
+	s.db.setSetting("cover_limit", "2")
+	c.want(site.URL + "/c.png")
+	if len(c.queue) != 1 {
+		t.Error("not queued after raising the limit")
+	}
+
+	// A cover that can't be saved gives its space back.
+	size := c.size
+	c.dir = filepath.Join(t.TempDir(), "file")
+	os.WriteFile(c.dir, nil, 0o644) // MkdirAll fails on a file
+	if err := c.fetch(context.Background(), site.URL+"/d.png"); err == nil {
+		t.Fatal("saved into a file")
+	}
+	if c.size != size {
+		t.Errorf("size = %d after a failed save, want %d", c.size, size)
+	}
+}
+
+func TestCoverFailuresForgetOldest(t *testing.T) {
+	s, _ := testServer(t)
+	c := s.covers
+	now := time.Now()
+	for i := range coverMaxFails {
+		c.failed[fmt.Sprint("https://x/", i)] = now.Add(-time.Duration(coverMaxFails-i) * time.Second)
+	}
+	c.want("https://x/new")
+	if _, ok := c.failed["https://x/0"]; ok {
+		t.Error("oldest failure kept")
+	}
+	if _, ok := c.failed[fmt.Sprint("https://x/", coverMaxFails-1)]; !ok {
+		t.Error("newest failure forgotten")
+	}
+	if len(c.failed) < coverMaxFails*8/10 {
+		t.Errorf("forgot too many: %d left", len(c.failed))
+	}
+}
+
+func TestCoverLimitTooBig(t *testing.T) {
+	s, ts := testServer(t)
+	admin, _ := s.db.createUser("ad", "pw", true)
+	tk, _ := s.db.createSession(admin, "web", "test")
+	form := url.Values{"interval": {"60"}, "cover_limit": {"9000000000000"}}
+	req, _ := http.NewRequest("POST", ts.URL+"/settings/server", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tk})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if got := s.db.setting("cover_limit"); got == "9000000000000" {
+		t.Error("saved a limit that overflows")
+	}
+	s.db.setSetting("cover_limit", "9000000000000")
+	if s.covers.limit() <= 0 {
+		t.Error("a huge stored limit wrapped around")
+	}
+}
+
+func TestPageQueryDropsLive(t *testing.T) {
+	r := httptest.NewRequest("GET", "/manga/x?lang=en&live=1", nil)
+	if q := pageQuery(r); q != "lang=en" {
+		t.Errorf("pageQuery = %q", q)
 	}
 }

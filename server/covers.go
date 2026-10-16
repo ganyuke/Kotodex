@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -34,7 +36,14 @@ const (
 	coverRetry    = 24 * time.Hour // after a failed download
 	coverWorkers  = 2
 	coverMaxFails = 10000 // failed addresses remembered at once
+
+	maxCoverLimitMB = 1 << 30 // 1 PB, keeps the limit in bytes from overflowing
 )
+
+// errCoversFull means the storage limit is reached. It isn't the address's
+// fault, so it isn't remembered as a failure, and raising the limit lets the
+// cover download right away.
+var errCoversFull = errors.New("cover storage is full")
 
 var coverTypes = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 
@@ -120,7 +129,7 @@ func newCovers(db *DB, mangaDir string) *Covers {
 	return &Covers{
 		dir: filepath.Join(mangaDir, "other"), client: coverClient(), queue: make(chan string, 256),
 		busy: map[string]bool{}, failed: map[string]time.Time{},
-		limit: func() int64 { return int64(db.settings().CoverLimitMB) << 20 },
+		limit: func() int64 { return int64(min(db.settings().CoverLimitMB, maxCoverLimitMB)) << 20 },
 	}
 }
 
@@ -148,25 +157,38 @@ func (c *Covers) want(u string) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return
 	}
+	if c.full() {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.busy[u] || time.Since(c.failed[u]) < coverRetry {
 		return
 	}
 	if len(c.failed) >= coverMaxFails {
-		for k, t := range c.failed {
-			if time.Since(t) >= coverRetry {
-				delete(c.failed, k)
-			}
-		}
-		if len(c.failed) >= coverMaxFails {
-			clear(c.failed)
-		}
+		c.forgetFailures()
 	}
 	select {
 	case c.queue <- u:
 		c.busy[u] = true
 	default: // plenty queued already, it'll be asked for again
+	}
+}
+
+// forgetFailures drops failures past the retry wait, then the oldest tenth
+// if that wasn't enough, so the rest keep their wait. c.mu is held.
+func (c *Covers) forgetFailures() {
+	for k, t := range c.failed {
+		if time.Since(t) >= coverRetry {
+			delete(c.failed, k)
+		}
+	}
+	if len(c.failed) < coverMaxFails {
+		return
+	}
+	keys := slices.SortedFunc(maps.Keys(c.failed), func(a, b string) int { return c.failed[a].Compare(c.failed[b]) })
+	for _, k := range keys[:len(keys)/10+1] {
+		delete(c.failed, k)
 	}
 }
 
@@ -182,7 +204,7 @@ func (c *Covers) Run(ctx context.Context) {
 					err := c.fetch(ctx, u)
 					c.mu.Lock()
 					delete(c.busy, u)
-					if err != nil {
+					if err != nil && !errors.Is(err, errCoversFull) {
 						c.failed[u] = time.Now()
 					}
 					c.mu.Unlock()
@@ -193,10 +215,8 @@ func (c *Covers) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// reserve counts n more bytes against the admin's storage limit, or
-// reports that they don't fit. Covers already stored are never deleted, so a
-// full limit only stops new downloads.
-func (c *Covers) reserve(n int64) bool {
+// measure counts what's stored, once.
+func (c *Covers) measure() {
 	c.sized.Do(func() {
 		entries, _ := os.ReadDir(c.dir)
 		for _, e := range entries {
@@ -205,6 +225,23 @@ func (c *Covers) reserve(n int64) bool {
 			}
 		}
 	})
+}
+
+// full reports whether the admin's storage limit is reached. Covers already
+// stored are never deleted, so a full limit only stops new downloads.
+func (c *Covers) full() bool {
+	c.measure()
+	limit := c.limit()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return limit > 0 && c.size >= limit
+}
+
+// reserve counts n more bytes against the storage limit, or reports that
+// they don't fit. A cover that isn't saved after all gives them back with
+// release.
+func (c *Covers) reserve(n int64) bool {
+	c.measure()
 	limit := c.limit()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -215,7 +252,17 @@ func (c *Covers) reserve(n int64) bool {
 	return true
 }
 
-func (c *Covers) fetch(ctx context.Context, u string) error {
+func (c *Covers) release(n int64) {
+	c.mu.Lock()
+	c.size -= n
+	c.mu.Unlock()
+}
+
+func (c *Covers) fetch(ctx context.Context, u string) (err error) {
+	// Queued before the limit was reached, so checked again here.
+	if c.full() {
+		return errCoversFull
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return err
@@ -230,6 +277,9 @@ func (c *Covers) fetch(ctx context.Context, u string) error {
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("cover: %s", res.Status)
 	}
+	if res.ContentLength > coverMaxBytes {
+		return errors.New("cover too large")
+	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, coverMaxBytes+1))
 	if err != nil {
 		return err
@@ -241,9 +291,15 @@ func (c *Covers) fetch(ctx context.Context, u string) error {
 	if !ok {
 		return errors.New("not an image")
 	}
-	if !c.reserve(int64(len(data))) {
-		return errors.New("cover storage is full")
+	n := int64(len(data))
+	if !c.reserve(n) {
+		return errCoversFull
 	}
+	defer func() {
+		if err != nil {
+			c.release(n)
+		}
+	}()
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return err
 	}

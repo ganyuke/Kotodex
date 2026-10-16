@@ -119,7 +119,7 @@
       <label>Check every (minutes)<input type="number" name="interval" min="10" value="{{$d.Interval}}" required></label>
       <label class="check"><input type="checkbox" name="data_saver" value="1"{{if $d.DataSaver}} checked{{end}}> Download smaller, compressed pages</label>
       <label class="check"><input type="checkbox" name="other_covers" value="1"{{if $d.OtherCovers}} checked{{end}}> <span>Load covers of manga from other sources</span> {{template "warning" "Kotodex downloads them from the sites people read on in Kotatsu, so those sites see this server's address. Off, they show as gray boxes."}}</label>
-      <label><span>Space for those covers, in MB (<abbr title="0 means no limit. Saved covers are never deleted. When the space is full, new covers aren't downloaded.">?</abbr>)</span><input type="number" name="cover_limit" min="0" value="{{$d.CoverLimit}}" required></label>
+      <label><span>Space for those covers, in MB (<abbr title="0 means no limit. Saved covers are never deleted. When the space is full, new covers aren't downloaded.">?</abbr>)</span><input type="number" name="cover_limit" min="0" max="1073741824" value="{{$d.CoverLimit}}" required></label>
       <fieldset>
         <legend>Show in search</legend>
         <label class="check"><input type="checkbox" name="rating" value="safe"{{if index $d.Ratings "safe"}} checked{{end}}> Safe</label>

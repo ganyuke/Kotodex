@@ -3,5 +3,5 @@
 <div class="head">
   <h1><a class="crumb" href="{{$d.Path}}">{{$d.Person.Name}}</a> <span class="muted">/</span> Reading log</h1>
 </div>
-{{if $d.Rows}}{{template "log" $d.Rows}}{{template "pager" $d.Pager}}{{else}}<p class="empty">No reading yet.</p>{{end}}
+{{if $d.Rows}}{{template "log" $d.Log}}{{template "pager" $d.Pager}}{{else}}<p class="empty">No reading yet.</p>{{end}}
 {{end}}
