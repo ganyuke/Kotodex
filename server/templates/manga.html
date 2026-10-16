@@ -5,6 +5,12 @@
   <div class="info">
     <h1>{{$m.Title}}</h1>
     {{if $m.Authors}}<p class="muted">{{join $m.Authors ", "}}{{if $m.Year}} · {{$m.Year}}{{end}}</p>{{end}}
+    {{with $d.Reading.Mine}}
+    <div class="my-progress">
+      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">· {{.Percent100}}% of {{plural .Chapters "chapter"}}</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
+      <progress class="meter" max="100" value="{{.Percent100}}" aria-label="Your progress"></progress>
+    </div>
+    {{end}}
     <dl class="facts" id="live-facts">{{template "live-facts" .}}</dl>
     <div class="buttons">
       {{if $m.Following}}
@@ -33,6 +39,25 @@
   </div>
 </div>
 
+{{with $d.Reading.Readers}}
+<h2>Readers</h2>
+<table class="list readers">
+  <thead><tr><th>Person</th><th>Lists</th><th class="c-progress">Progress</th><th>Chapter</th><th class="num">Reading time</th><th>Last read</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr{{if .Me}} class="mine"{{end}}>
+    <td><a href="{{people .UserName}}">{{.UserName}}</a>{{if .Me}} <span class="muted">(you)</span>{{end}}</td>
+    <td>{{range .Lists}}<span class="pill">{{.}}</span> {{end}}</td>
+    <td><progress class="meter" max="100" value="{{.Percent100}}" aria-label="Progress"></progress></td>
+    <td>{{.Where}}</td>
+    <td class="num">{{if .Time}}{{minutes .Time}}{{end}}</td>
+    <td class="nowrap">{{agoMs .Updated}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
 <div class="head chapters-head">
   <h2>Chapters</h2>
   <div class="filters">
@@ -55,6 +80,7 @@
 <dt>Status</dt><dd>{{title $m.Status}}</dd>
 <dt>Downloaded</dt><dd>{{$m.Downloaded}} of {{$m.Known}} chapters{{if $d.Size}} ({{size $d.Size}}){{end}}</dd>
 <dt>Followers</dt><dd>{{$m.Followers}}</dd>
+{{with $d.Reading.InLists}}<dt>In lists</dt><dd>{{range $i, $l := .}}{{if $i}}, {{end}}{{$l.Title}} ({{$l.Count}}){{end}}</dd>{{end}}
 {{if $d.Linked}}<dt>Your MangaDex</dt><dd>{{if $d.OnMangaDex}}Following{{else}}Not following{{end}}</dd>{{end}}
 <dt>Last checked</dt><dd>{{ago $m.Checked}}</dd>
 <dt>MangaDex</dt><dd><a href="https://mangadex.org/title/{{$m.ID}}" target="_blank" rel="noopener">Open on MangaDex</a></dd>
@@ -71,8 +97,8 @@
 {{$d := .Data}}{{$m := $d.Manga}}{{$admin := .User.Admin}}
 {{if $d.Chapters}}
 <table class="list compact fixed chapters">
-  <colgroup><col class="c-chapter"><col><col class="c-lang"><col class="c-group"><col class="c-date"><col class="c-pages"><col class="c-status"><col class="c-actions"></colgroup>
-  <thead><tr><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th>Published</th><th class="num">Pages</th><th>Status</th><th></th></tr></thead>
+  <colgroup><col class="c-chapter"><col><col class="c-lang"><col class="c-group"><col class="c-date"><col class="c-pages"><col class="c-you"><col class="c-status"><col class="c-actions"></colgroup>
+  <thead><tr><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th>Published</th><th class="num">Pages</th><th>You</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {{range $d.Chapters}}
   <tr id="c-{{.ID}}" class="state{{.State}}">
@@ -82,6 +108,7 @@
     <td title="{{.Group}}">{{.Group}}</td>
     <td>{{date .Published}}</td>
     <td class="num">{{.Pages}}</td>
+    <td>{{with index $d.Reading.Chapters .ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
     <td>
       {{if and $d.Current (eq $d.Current.ChapterID .ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
       {{else if eq .State 2}}<span title="{{date .Downloaded}}">Downloaded</span>

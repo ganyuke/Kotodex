@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +41,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	}
 	s := &Server{
 		db: db, mdx: mdx, dl: newDownloader(db, mdx, keys, mangaDir), keys: keys,
-		mangaDir: mangaDir, limiter: &loginLimiter{fails: map[string][]time.Time{}},
+		mangaDir: mangaDir, limiter: &loginLimiter{fails: map[string][]time.Time{}}, covers: newCovers(mangaDir),
 	}
 	s.loadTemplates()
 	ts := httptest.NewServer(s.routes())
@@ -1335,5 +1338,485 @@ func TestQueuedColumnAdded(t *testing.T) {
 	var queued int64
 	if err := db.QueryRow(`SELECT queued FROM chapters WHERE id='old'`).Scan(&queued); err != nil || queued != 123 {
 		t.Fatalf("queued = %d, %v", queued, err)
+	}
+}
+
+// Kotatsu sync
+
+// syncManga is a manga object shaped like the app's MangaSyncDto.
+func syncManga(id int64, url string) string {
+	return fmt.Sprintf(`{"manga_id":%d,"title":"Manga %d","alt_title":null,"url":%q,"public_url":"https://mangadex.org/title/%s","rating":-1.0,"content_rating":null,"cover_url":"https://example.org/c.jpg","large_cover_url":null,"tags":[{"tag_id":5,"title":"Comedy","key":"comedy","source":%q}],"state":"ONGOING","author":null,"source":%q}`,
+		id, id, url, url, kotodexSource, kotodexSource)
+}
+
+func historyRow(mangaID, chapterID, updated, deleted int64, page int) string {
+	return fmt.Sprintf(`{"manga_id":%d,"created_at":1000,"updated_at":%d,"chapter_id":%d,"page":%d,"scroll":0.0,"percent":0.25,"deleted_at":%d,"chapters":12,"manga":%s}`,
+		mangaID, updated, chapterID, page, deleted, syncManga(mangaID, mangaA))
+}
+
+func syncAuth(t *testing.T, ts *httptest.Server, email, password string) (int, string) {
+	t.Helper()
+	res, err := http.Post(ts.URL+"/auth", "application/json", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
+}
+
+func syncPost(t *testing.T, ts *httptest.Server, token, path, body string) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", ts.URL+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, b
+}
+
+func syncToken(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", "pw")
+	var out struct{ Token string }
+	json.Unmarshal([]byte(body), &out)
+	if code != http.StatusOK || out.Token == "" {
+		t.Fatalf("sign in: %d %s", code, body)
+	}
+	return out.Token
+}
+
+func TestSyncAuth(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	for _, email := range []string{"mio@kotodex.home.arpa", "Mio@manga.example.com", "mio"} {
+		if code, body := syncAuth(t, ts, email, "pw"); code != http.StatusOK || !strings.Contains(body, `"token"`) {
+			t.Errorf("%s: %d %s", email, code, body)
+		}
+	}
+	// The app shows the reply as the error, with the quotes removed.
+	if code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", "nope"); code != http.StatusUnauthorized || strings.TrimSpace(body) != `"Wrong username or password"` {
+		t.Errorf("wrong password: %d %s", code, body)
+	}
+	sessions, _ := s.db.sessions(uid, "")
+	n := 0
+	for _, se := range sessions {
+		if se.Kind == "sync" {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("sync sessions = %d, want 3", n)
+	}
+	if code, _ := syncPost(t, ts, "bad", "/resource/history", `{"timestamp":1}`); code != http.StatusUnauthorized {
+		t.Errorf("bad token: %d", code)
+	}
+	// A sync sign-in only works for sync, and other sign-ins don't work for sync.
+	syncTok := syncToken(t, ts)
+	plugin, _ := s.db.createSession(uid, "kotatsu", "test")
+	for _, c := range []struct {
+		path, token string
+		want        int
+	}{
+		{"/api/v1/me", syncTok, http.StatusUnauthorized},
+		{"/settings", syncTok, http.StatusSeeOther},
+		{"/api/v1/me", plugin, http.StatusOK},
+	} {
+		req, _ := http.NewRequest("GET", ts.URL+c.path, nil)
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		if res, err := client.Do(req); err != nil || res.StatusCode != c.want {
+			t.Errorf("%s: %v %v, want %d", c.path, res.StatusCode, err, c.want)
+		}
+	}
+	if code, _ := syncPost(t, ts, plugin, "/resource/history", `{"timestamp":1}`); code != http.StatusUnauthorized {
+		t.Errorf("plugin token on sync: %d", code)
+	}
+	// A browser's session cookie can't write sync data.
+	web, _ := s.db.createSession(uid, "web", "test")
+	req, _ := http.NewRequest("POST", ts.URL+"/resource/history", strings.NewReader(`{"history":[`+historyRow(1, 1, 1, 0, 0)+`],"timestamp":1}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: web})
+	if res, err := http.DefaultClient.Do(req); err != nil || res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("cookie only: %v %v", res.StatusCode, err)
+	}
+}
+
+func TestSyncHistory(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token := syncToken(t, ts)
+	events := func() int {
+		var n int
+		s.db.QueryRow(`SELECT count(*) FROM reading_events WHERE user_id=?`, uid).Scan(&n)
+		return n
+	}
+
+	// First sync: the reply would be what was sent, so there's nothing to send back.
+	body := `{"history":[` + historyRow(-5, 11, 2000, 0, 3) + `,` + historyRow(7, 12, 2500, 0, 0) + `],"timestamp":1}`
+	if code, b := syncPost(t, ts, token, "/resource/history", body); code != http.StatusNoContent {
+		t.Fatalf("first sync: %d %s", code, b)
+	}
+	if events() != 2 {
+		t.Fatalf("events = %d, want 2", events())
+	}
+	// The same upload again logs nothing new.
+	syncPost(t, ts, token, "/resource/history", body)
+	if events() != 2 {
+		t.Fatalf("repeat upload logged events: %d", events())
+	}
+
+	// A phone with older progress for -5 and nothing for 7: the newer row
+	// stays, and the reply carries both rows with every field the app expects.
+	code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+historyRow(-5, 10, 1500, 0, 9)+`],"timestamp":1}`)
+	if code != http.StatusOK {
+		t.Fatalf("stale upload: %d %s", code, b)
+	}
+	var reply struct {
+		History   []map[string]json.RawMessage
+		Timestamp int64
+	}
+	if err := json.Unmarshal(b, &reply); err != nil || len(reply.History) != 2 || reply.Timestamp == 0 {
+		t.Fatalf("reply: %v %s", err, b)
+	}
+	want := []string{"chapter_id", "chapters", "created_at", "deleted_at", "manga", "manga_id", "page", "percent", "scroll", "updated_at"}
+	for _, row := range reply.History {
+		keys := slices.Sorted(maps.Keys(row))
+		if !slices.Equal(keys, want) {
+			t.Errorf("row fields = %v", keys)
+		}
+	}
+	if string(reply.History[0]["manga"]) != syncManga(-5, mangaA) {
+		t.Errorf("manga changed on the way back:\n%s\n%s", reply.History[0]["manga"], syncManga(-5, mangaA))
+	}
+	if string(reply.History[0]["chapter_id"]) != "11" || events() != 2 {
+		t.Errorf("stale progress won: chapter %s, %d events", reply.History[0]["chapter_id"], events())
+	}
+
+	// Newer progress replaces the row and is logged.
+	syncPost(t, ts, token, "/resource/history", `{"history":[`+historyRow(-5, 12, 3000, 0, 1)+`],"timestamp":1}`)
+	var chapter, deleted int64
+	s.db.QueryRow(`SELECT chapter_id,deleted_at FROM sync_history WHERE user_id=? AND manga_id=-5`, uid).Scan(&chapter, &deleted)
+	if chapter != 12 || events() != 3 {
+		t.Errorf("newer progress: chapter %d, %d events", chapter, events())
+	}
+	// Removing it on the phone sticks, even with the same save time.
+	syncPost(t, ts, token, "/resource/history", `{"history":[`+historyRow(-5, 12, 3000, 4000, 1)+`],"timestamp":1}`)
+	s.db.QueryRow(`SELECT deleted_at FROM sync_history WHERE user_id=? AND manga_id=-5`, uid).Scan(&deleted)
+	if deleted != 4000 || events() != 3 {
+		t.Errorf("removal: deleted_at %d, %d events", deleted, events())
+	}
+
+	// A big library goes through in batches.
+	var rows []string
+	for i := range 450 {
+		rows = append(rows, historyRow(int64(1000+i), 1, int64(5000+i), 0, 0))
+	}
+	if code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+strings.Join(rows, ",")+`],"timestamp":1}`); code != http.StatusOK {
+		t.Fatalf("big upload: %d %s", code, b)
+	}
+	if events() != 453 {
+		t.Errorf("events after big upload = %d", events())
+	}
+
+	// A manga that doesn't match its row is refused, with a reason.
+	bad := strings.Replace(historyRow(8, 1, 1, 0, 0), `"manga":{"manga_id":8`, `"manga":{"manga_id":9`, 1)
+	if code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+bad+`],"timestamp":1}`); code != http.StatusBadRequest {
+		t.Errorf("mismatched manga: %d %s", code, b)
+	}
+}
+
+func TestSyncFavourites(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token := syncToken(t, ts)
+	cats := `"categories":[{"category_id":1,"created_at":10,"sort_key":0,"title":"Reading","order":"NEWEST","track":true,"show_in_lib":true,"deleted_at":0},` +
+		`{"category_id":2,"created_at":11,"sort_key":1,"title":"Dropped","order":"NEWEST","track":false,"show_in_lib":true,"deleted_at":0}]`
+	fav := func(manga, cat, created, deleted int64) string {
+		return fmt.Sprintf(`{"manga_id":%d,"manga":%s,"category_id":%d,"sort_key":0,"pinned":false,"created_at":%d,"deleted_at":%d}`,
+			manga, syncManga(manga, mangaA), cat, created, deleted)
+	}
+	kinds := func() string {
+		rows, _ := s.db.Query(`SELECT kind,category_id FROM list_events WHERE user_id=? ORDER BY at,kind`, uid)
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var k string
+			var c int
+			rows.Scan(&k, &c)
+			out = append(out, fmt.Sprintf("%s %d", k, c))
+		}
+		return strings.Join(out, ", ")
+	}
+
+	body := `{` + cats + `,"favourites":[` + fav(-5, 1, 100, 0) + `],"timestamp":1}`
+	if code, b := syncPost(t, ts, token, "/resource/favourites", body); code != http.StatusNoContent {
+		t.Fatalf("first sync: %d %s", code, b)
+	}
+	// Moving it to Dropped removes it from one category and adds it to the other.
+	code, b := syncPost(t, ts, token, "/resource/favourites", `{`+cats+`,"favourites":[`+fav(-5, 1, 100, 200)+`,`+fav(-5, 2, 200, 0)+`],"timestamp":1}`)
+	if code != http.StatusNoContent {
+		t.Fatalf("move: %d %s", code, b)
+	}
+	if got := kinds(); got != "added 1, added 2, removed 1" {
+		t.Errorf("list events = %q", got)
+	}
+	// Another phone that hasn't caught up gets everything back.
+	code, b = syncPost(t, ts, token, "/resource/favourites", `{"categories":[],"favourites":[],"timestamp":1}`)
+	var reply struct {
+		Categories []map[string]json.RawMessage
+		Favourites []map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(b, &reply); code != http.StatusOK || err != nil || len(reply.Categories) != 2 || len(reply.Favourites) != 2 {
+		t.Fatalf("catch up: %d %s", code, b)
+	}
+	if keys := slices.Sorted(maps.Keys(reply.Favourites[0])); !slices.Equal(keys, []string{"category_id", "created_at", "deleted_at", "manga", "manga_id", "pinned", "sort_key"}) {
+		t.Errorf("favorite fields = %v", keys)
+	}
+	if keys := slices.Sorted(maps.Keys(reply.Categories[0])); !slices.Equal(keys, []string{"category_id", "created_at", "deleted_at", "order", "show_in_lib", "sort_key", "title", "track"}) {
+		t.Errorf("category fields = %v", keys)
+	}
+}
+
+func TestStableID(t *testing.T) {
+	// 64-bit FNV-1a test vector, and the plugin's IDs are the same hash.
+	if got := uint64(stableID("a")); got != 0xaf63dc4c8601ec8c {
+		t.Errorf("stableID(a) = %x", got)
+	}
+}
+
+// otherManga is a manga from a source that isn't Kotodex.
+func otherManga(id int64, title string) string {
+	return fmt.Sprintf(`{"manga_id":%d,"title":%q,"alt_title":null,"url":"/m/1","public_url":"https://example.org/m/1","rating":-1.0,"content_rating":null,"cover_url":"https://example.org/c.jpg","large_cover_url":null,"tags":[],"state":null,"author":null,"source":"MANGAPARK"}`, id, title)
+}
+
+func webGet(t *testing.T, ts *httptest.Server, token, path string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", ts.URL+path, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
+}
+
+// syncReading signs mio's app in and syncs a session on a Kotodex manga and
+// some reading from another source, plus a list with both.
+func syncReading(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+	token := syncToken(t, ts)
+	now := time.Now().UnixMilli()
+	kid := stableID("manga:" + mangaA)
+	kotodex := func(updated int64, page int) string {
+		return fmt.Sprintf(`{"manga_id":%d,"created_at":1000,"updated_at":%d,"chapter_id":%d,"page":%d,"scroll":0.0,"percent":0.4,"deleted_at":0,"chapters":2,"manga":%s}`,
+			kid, updated, stableID("chapter:"+chapter1), page, syncManga(kid, mangaA))
+	}
+	other := fmt.Sprintf(`{"manga_id":77,"created_at":1000,"updated_at":%d,"chapter_id":5,"page":0,"scroll":0.0,"percent":0.5,"deleted_at":0,"chapters":10,"manga":%s}`,
+		now-60_000, otherManga(77, "Secret Manga"))
+	for _, body := range []string{
+		`{"history":[` + kotodex(now-20*60_000, 0) + `],"timestamp":1}`,
+		`{"history":[` + kotodex(now-5*60_000, 3) + `,` + other + `],"timestamp":1}`,
+	} {
+		if code, b := syncPost(t, ts, token, "/resource/history", body); code >= 300 && code != http.StatusNoContent {
+			t.Fatalf("history: %d %s", code, b)
+		}
+	}
+	favs := fmt.Sprintf(`{"categories":[{"category_id":1,"created_at":10,"sort_key":0,"title":"Plan to read","order":"NEWEST","track":true,"show_in_lib":true,"deleted_at":0}],"favourites":[`+
+		`{"manga_id":%d,"manga":%s,"category_id":1,"sort_key":0,"pinned":false,"created_at":%d,"deleted_at":0},`+
+		`{"manga_id":77,"manga":%s,"category_id":1,"sort_key":0,"pinned":false,"created_at":%d,"deleted_at":0}],"timestamp":1}`,
+		kid, syncManga(kid, mangaA), now-30*60_000, otherManga(77, "Secret Manga"), now-30*60_000)
+	if code, b := syncPost(t, ts, token, "/resource/favourites", favs); code >= 300 && code != http.StatusNoContent {
+		t.Fatalf("favourites: %d %s", code, b)
+	}
+}
+
+func TestReadingSessions(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	syncReading(t, ts)
+	list, err := s.db.readSessions(uid, uid, 0, mangaA)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("sessions: %v %d", err, len(list))
+	}
+	if d := list[0].Duration(); d != 15*time.Minute {
+		t.Errorf("duration = %v", d)
+	}
+	// A save more than half an hour later starts a new session.
+	s.db.Exec(`INSERT INTO reading_events(user_id,manga_id,chapter_id,page,percent,at) VALUES(?,?,?,?,?,?)`,
+		uid, stableID("manga:"+mangaA), stableID("chapter:"+chapter1), 5, 0.5, time.Now().Add(40*time.Minute).UnixMilli())
+	if list, _ = s.db.readSessions(uid, uid, 0, mangaA); len(list) != 2 {
+		t.Errorf("sessions after a gap = %d, want 2", len(list))
+	}
+}
+
+func TestReadingSharing(t *testing.T) {
+	s, ts := testServer(t)
+	mio := seed(t, s)
+	syncReading(t, ts)
+	rin, _ := s.db.createUser("rin", "pw", false)
+	boss, _ := s.db.createUser("boss", "pw", true)
+	token := func(uid int64) string {
+		tk, err := s.db.createSession(uid, "web", "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tk
+	}
+	mioT, rinT, bossT := token(mio), token(rin), token(boss)
+	const where = "Ch. 10, page 4"
+
+	for _, c := range []struct {
+		share                string
+		kotodex, other, list bool
+	}{
+		{shareAll, true, true, true},
+		{shareKotodex, true, false, true},
+		{shareNone, false, false, false},
+	} {
+		if err := s.db.setShare(mio, c.share); err != nil {
+			t.Fatal(err)
+		}
+		// An admin sees the same as anyone else.
+		for _, viewer := range []string{rinT, bossT} {
+			_, profile := webGet(t, ts, viewer, "/people/mio")
+			_, activity := webGet(t, ts, viewer, "/activity")
+			_, manga := webGet(t, ts, viewer, "/manga/"+mangaA)
+			if strings.Contains(profile, where) != c.kotodex || strings.Contains(activity, "Read Ch. 10") != c.kotodex || strings.Contains(manga, where) != c.kotodex {
+				t.Errorf("%s: Kotodex reading shown = %v %v %v", c.share, strings.Contains(profile, where), strings.Contains(activity, "Read Ch. 10"), strings.Contains(manga, where))
+			}
+			if strings.Contains(profile, "Secret Manga") != c.other || strings.Contains(activity, "Secret Manga") != c.other {
+				t.Errorf("%s: other source shown = %v %v", c.share, strings.Contains(profile, "Secret Manga"), strings.Contains(activity, "Secret Manga"))
+			}
+			if strings.Contains(manga, "Plan to read") != c.list {
+				t.Errorf("%s: list on manga page = %v", c.share, strings.Contains(manga, "Plan to read"))
+			}
+			if code, _ := webGet(t, ts, viewer, "/people/mio/lists/1"); (code == http.StatusOK) != c.list {
+				t.Errorf("%s: list page = %d", c.share, code)
+			}
+			// What mio follows shows either way.
+			if !strings.Contains(profile, "Akanabe") {
+				t.Errorf("%s: follows hidden", c.share)
+			}
+		}
+		// mio always sees all of it.
+		_, own := webGet(t, ts, mioT, "/people/mio")
+		if !strings.Contains(own, where) || !strings.Contains(own, "Secret Manga") {
+			t.Errorf("%s: own profile is missing reading", c.share)
+		}
+	}
+	if code, _ := webGet(t, ts, rinT, "/people/mio/reading"); code != http.StatusSeeOther {
+		t.Errorf("reading page while sharing nothing = %d", code)
+	}
+	if code, _ := webGet(t, ts, rinT, "/people/nobody"); code != http.StatusNotFound {
+		t.Errorf("unknown person = %d", code)
+	}
+}
+
+func TestReadingPages(t *testing.T) {
+	s, ts := testServer(t)
+	mio := seed(t, s)
+	syncReading(t, ts)
+	tk, _ := s.db.createSession(mio, "web", "test")
+	for _, path := range []string{"/activity", "/activity?show=mine", "/people/mio", "/people/mio/reading", "/people/mio/reading?tab=finished&sort=title&q=sec",
+		"/people/mio/lists/1?sort=added", "/people/mio/log", "/people/mio/following", "/manga/" + mangaA, "/settings"} {
+		code, body := webGet(t, ts, tk, path)
+		if code != http.StatusOK || !strings.Contains(body, "</html>") {
+			t.Errorf("%s: %d", path, code)
+		}
+	}
+	_, manga := webGet(t, ts, tk, "/manga/"+mangaA)
+	for _, want := range []string{"Page 4", "In lists", "Plan to read (1)", "(you)"} {
+		if !strings.Contains(manga, want) {
+			t.Errorf("manga page is missing %q", want)
+		}
+	}
+	_, settings := webGet(t, ts, tk, "/settings")
+	if !strings.Contains(settings, "Kotatsu sync") || !strings.Contains(settings, `data-sync-email="mio"`) {
+		t.Error("settings is missing the sync card")
+	}
+}
+
+func TestPublicAddr(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"8.8.8.8": true, "2606:4700::1111": true,
+		"127.0.0.1": false, "10.1.2.3": false, "192.168.1.20": false, "172.16.0.1": false, "169.254.169.254": false,
+		"100.64.0.1": false, "0.0.0.0": false, "::1": false, "fe80::1": false, "fd00::1": false,
+		"::ffff:127.0.0.1": false, "64:ff9b::a00:1": false, "2002:c0a8:101::1": false,
+	} {
+		if got := publicAddr(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("publicAddr(%s) = %v", addr, got)
+		}
+	}
+}
+
+// pngBytes is a 1x1 PNG.
+var pngBytes = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0d, 0x0a, 0x2d, 0xb4, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
+
+func TestOtherCovers(t *testing.T) {
+	s, ts := testServer(t)
+	mio := seed(t, s)
+	syncReading(t, ts)
+	var agent sync.Map // the test site's handler runs on its own goroutines
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent.Store("ua", r.UserAgent())
+		if r.URL.Path == "/page.html" {
+			w.Write([]byte("<html>not a cover</html>"))
+			return
+		}
+		w.Write(pngBytes)
+	}))
+	defer site.Close()
+
+	// The real client won't fetch from this machine, or anything else that
+	// isn't on the public internet.
+	if err := s.covers.fetch(context.Background(), site.URL+"/c.png"); err == nil || !strings.Contains(err.Error(), "not a public address") {
+		t.Fatalf("fetched from a local address: %v", err)
+	}
+
+	s.covers.client = site.Client() // allowed to reach the test site
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.covers.Run(ctx)
+	s.db.Exec(`UPDATE sync_manga SET cover=? WHERE id=77`, site.URL+"/c.png")
+	tk, _ := s.db.createSession(mio, "web", "test")
+
+	// Off by default: nothing is downloaded.
+	webGet(t, ts, tk, "/people/mio")
+	time.Sleep(200 * time.Millisecond)
+	if _, asked := agent.Load("ua"); s.covers.cached(site.URL+"/c.png") != "" || asked {
+		t.Fatal("downloaded a cover with the setting off")
+	}
+
+	s.db.setSetting("other_covers", "1")
+	webGet(t, ts, tk, "/people/mio")
+	for i := 0; i < 50 && s.covers.cached(site.URL+"/c.png") == ""; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ua, _ := agent.Load("ua"); ua != coverAgent {
+		t.Errorf("User-Agent = %v", ua)
+	}
+	_, page := webGet(t, ts, tk, "/people/mio")
+	i := strings.Index(page, "/other/")
+	if i < 0 {
+		t.Fatal("no cover link on the profile")
+	}
+	start := strings.LastIndex(page[:i], `"`) + 1
+	link := page[start : start+strings.Index(page[start:], `"`)]
+	res, err := http.Get(ts.URL + link)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("cover link %s: %v %v", link, res.StatusCode, err)
+	}
+	res.Body.Close()
+
+	// Something that isn't an image is never kept.
+	if err := s.covers.fetch(ctx, site.URL+"/page.html"); err == nil || s.covers.cached(site.URL+"/page.html") != "" {
+		t.Errorf("kept a page that isn't an image: %v", err)
 	}
 }

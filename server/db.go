@@ -136,6 +136,23 @@ func openDB(path string) (*DB, error) {
 		}
 		db.Exec(`UPDATE chapters SET queued=published WHERE state IN (1,3)`)
 	}
+	if _, err := db.Exec(syncSchema); err != nil {
+		return nil, fmt.Errorf("create sync schema: %w", err)
+	}
+	// Columns added with reading activity: who sees your reading, and when
+	// your app last synced.
+	for _, col := range []struct{ name, def string }{
+		{"share", `TEXT NOT NULL DEFAULT 'kotodex'`},
+		{"synced", `INTEGER NOT NULL DEFAULT 0`},
+	} {
+		var has int
+		db.QueryRow(`SELECT count(*) FROM pragma_table_info('users') WHERE name=?`, col.name).Scan(&has)
+		if has == 0 {
+			if _, err := db.Exec(`ALTER TABLE users ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+				return nil, fmt.Errorf("add users.%s: %w", col.name, err)
+			}
+		}
+	}
 	return &DB{DB: db}, nil
 }
 
@@ -160,12 +177,14 @@ type Settings struct {
 	Interval       time.Duration
 	DataSaver      bool
 	ContentRatings []string
+	OtherCovers    bool // load covers of synced manga from other sources
 }
 
 var defaultSettings = map[string]string{
 	"interval":        "60",
 	"data_saver":      "0",
 	"content_ratings": "safe,suggestive,erotica",
+	"other_covers":    "0",
 }
 
 func (db *DB) setting(key string) string {
@@ -190,6 +209,7 @@ func (db *DB) settings() Settings {
 		Interval:       time.Duration(minutes) * time.Minute,
 		DataSaver:      db.setting("data_saver") == "1",
 		ContentRatings: splitList(db.setting("content_ratings")),
+		OtherCovers:    db.setting("other_covers") == "1",
 	}
 }
 

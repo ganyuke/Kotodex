@@ -1,0 +1,79 @@
+{{define "content"}}
+{{$d := .Data}}{{$p := $d.Person}}
+<div class="head">
+  <h1>{{$p.Name}}</h1>
+  {{if $d.Shows}}<span class="muted">{{plural $d.WeekChapters "chapter"}} and {{$d.WeekTime}} this week</span>{{else}}<span class="muted">Reading not shared</span>{{end}}
+  {{if $d.Me}}<span class="muted buttons">Others see: {{if eq $p.Share "all"}}everything you read{{else if eq $p.Share "kotodex"}}Kotodex manga only{{else}}what you follow{{end}} · <a href="/settings#reading">Change</a></span>{{end}}
+</div>
+{{if and $d.Me (not $p.Synced)}}<p class="notice">Your reading shows up here once Kotatsu syncs with Kotodex. Settings has the steps.</p>{{end}}
+
+{{if not $d.Shows}}
+<h2>Following<span class="count">{{$d.FollowCount}}</span></h2>
+{{template "follows" $d.Follows}}
+{{else}}
+<h2>Past year</h2>
+{{with $d.Heatmap}}
+<figure class="heatmap">
+  <svg viewBox="0 0 {{.Width}} {{.Height}}" width="{{.Width}}" height="{{.Height}}" role="img" aria-label="Reading time per day for the past year">
+    {{range .Months}}<text x="{{.X}}" y="10">{{.Label}}</text>{{end}}
+    <text x="0" y="39">Mon</text><text x="0" y="67">Wed</text><text x="0" y="95">Fri</text>
+    {{range .Days}}{{if not .Hidden}}<rect x="{{.X}}" y="{{.Y}}" width="11" height="11" rx="2" class="h{{.Level}}"><title>{{.Tip}}</title></rect>{{end}}{{end}}
+  </svg>
+  <figcaption class="muted">{{.Hours}} hours on {{plural .DaysOn "day"}} in the past year</figcaption>
+</figure>
+{{end}}
+
+<div class="split">
+<div>
+  <div class="row section-head">
+    <h2>Reading<span class="count">{{$d.ReadingCount}}</span></h2>
+    {{if $d.Reading}}<span class="muted">Last read first</span>{{end}}
+    {{if gt $d.ReadingCount (len $d.Reading)}}<a class="push" href="{{$d.Path}}/reading">Show all {{$d.ReadingCount}}</a>{{else if $d.ReadingCount}}<a class="push" href="{{$d.Path}}/reading?tab=finished">Finished</a>{{end}}
+  </div>
+  {{if $d.Reading}}{{template "places" $d.Reading}}{{else}}<p class="empty small">Nothing in progress.</p>{{end}}
+
+  {{if $d.Lists}}
+  <h2>Lists</h2>
+  {{range $d.Lists}}
+  <section class="shelf-section">
+    <div class="row section-head">
+      <h3>{{.Title}}<span class="count">{{.Count}}</span></h3>
+      {{if gt .Count (len .Entries)}}<a href="{{$d.Path}}/lists/{{.ID}}">Show all {{.Count}}</a>{{else}}<a href="{{$d.Path}}/lists/{{.ID}}">Details</a>{{end}}
+    </div>
+    <div class="shelf">
+      {{range .Entries}}
+      {{if .Local}}<a class="tile" href="/manga/{{.Local.ID}}">{{else}}<div class="tile">{{end}}
+        {{if .Cover}}<img class="cover" src="{{.Cover}}" alt="" loading="lazy">{{else}}<span class="cover"></span>{{end}}
+        <progress class="meter" max="100" value="{{if .Place}}{{.Place.Percent100}}{{else}}0{{end}}" aria-label="Progress"></progress>
+        <span class="name">{{.Title}}</span>
+      {{if .Local}}</a>{{else}}</div>{{end}}
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+  {{end}}
+
+  <div class="row section-head">
+    <h2>Reading log</h2>
+    {{if $d.LogMore}}<a class="push" href="{{$d.Path}}/log">Show all</a>{{end}}
+  </div>
+  {{if $d.Log}}{{template "log" $d.Log}}{{else}}<p class="empty small">No reading yet.</p>{{end}}
+</div>
+<aside>
+  <div class="row section-head">
+    <h2>Following<span class="count">{{$d.FollowCount}}</span></h2>
+    {{if gt $d.FollowCount (len $d.Follows)}}<a class="push" href="{{$d.Path}}/following">Show all {{$d.FollowCount}}</a>{{end}}
+  </div>
+  {{if $d.Follows}}
+  <table class="list compact">
+    <tbody>
+    {{range $d.Follows}}
+    <tr><td class="thumbcol"><a href="/manga/{{.ID}}">{{if .Thumb}}<img class="thumb small" src="{{.Thumb}}" alt="" loading="lazy">{{else}}<span class="thumb small"></span>{{end}}</a></td><td><a class="title" href="/manga/{{.ID}}">{{.Title}}</a></td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty small">Not following anything.</p>{{end}}
+</aside>
+</div>
+{{end}}
+{{end}}

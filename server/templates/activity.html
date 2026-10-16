@@ -1,0 +1,60 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1>Activity</h1>
+  <div class="filters">
+    <div class="seg">
+      <a href="/activity"{{if not $d.Mine}} class="on"{{end}}>Everyone</a>
+      <a href="/activity?show=mine"{{if $d.Mine}} class="on"{{end}}>Mine</a>
+    </div>
+  </div>
+</div>
+<div id="live-activity">{{template "live-activity" .}}</div>
+{{end}}
+
+{{define "live-activity"}}
+{{$d := .Data}}
+<div class="split">
+<div>
+  {{range $d.Days}}
+  <h2>{{.Label}}</h2>
+  <div class="scroll">
+  <table class="list feed">
+    <thead><tr><th class="thumbcol"></th><th>Manga</th><th class="c-person">Person</th><th class="c-activity">Activity</th><th class="num c-time">Reading time</th><th class="c-when">When</th></tr></thead>
+    <tbody>
+    {{range .Items}}
+    <tr>
+      <td class="thumbcol">{{template "thumb" .}}</td>
+      <td>{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span> <span class="muted">· {{.SourceName}}</span>{{end}}</td>
+      <td><a href="{{people .UserName}}">{{.UserName}}</a></td>
+      <td>{{if eq .Kind "list"}}{{if eq .What "Moved from"}}Moved from <span class="pill">{{index .Pills 0}}</span> to <span class="pill">{{index .Pills 1}}</span>{{else}}{{.What}} <span class="pill">{{index .Pills 0}}</span>{{end}}{{else}}{{.What}}{{end}}</td>
+      <td class="num">{{if .Time}}{{minutes .Time}}{{end}}</td>
+      <td class="nowrap">{{clock .At}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="empty">Nothing in the last two weeks. Reading shows up here once Kotatsu syncs with Kotodex. Settings has the steps.</p>
+  {{end}}
+</div>
+<aside>
+  <h2>Most read this week</h2>
+  {{if $d.MostRead}}
+  <table class="list compact">
+    <thead><tr><th class="thumbcol"></th><th>Manga</th><th class="num">Chapters</th></tr></thead>
+    <tbody>
+    {{range $d.MostRead}}
+    <tr>
+      <td class="thumbcol">{{template "thumb" .}}</td>
+      <td>{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}<div class="muted">{{join .Readers ", "}}</div></td>
+      <td class="num">{{.Chapters}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty small">No reading this week.</p>{{end}}
+</aside>
+</div>
+{{end}}

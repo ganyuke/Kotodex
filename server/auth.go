@@ -159,15 +159,30 @@ func (db *DB) createSession(userID int64, kind, agent string) (string, error) {
 	return token, err
 }
 
+// sessionUser is the user signed in with token in a browser or the plugin.
+// Kotatsu's sync sign-ins don't count: they only work for sync.
 func (db *DB) sessionUser(token string) (*User, error) {
+	return db.session(token, false)
+}
+
+// syncUser is the user Kotatsu signed in for sync. Other sign-ins don't work
+// for sync.
+func (db *DB) syncUser(token string) (*User, error) {
+	return db.session(token, true)
+}
+
+func (db *DB) session(token string, sync bool) (*User, error) {
 	if token == "" {
 		return nil, errors.New("no session")
 	}
 	h := hashToken(token)
 	var userID, used int64
-	var sid string
-	if err := db.QueryRow(`SELECT user_id,used,sid FROM sessions WHERE hash=?`, h).Scan(&userID, &used, &sid); err != nil {
+	var sid, kind string
+	if err := db.QueryRow(`SELECT user_id,used,sid,kind FROM sessions WHERE hash=?`, h).Scan(&userID, &used, &sid, &kind); err != nil {
 		return nil, err
+	}
+	if (kind == "sync") != sync {
+		return nil, errors.New("wrong kind of session")
 	}
 	if used < idleCutoff() {
 		db.Exec(`DELETE FROM sessions WHERE hash=?`, h)
@@ -243,7 +258,7 @@ func truncate(s string, n int) string {
 // deletes its session, which revokes every link it was given. Changing the
 // password deletes all of the user's sessions.
 
-var filePathRe = regexp.MustCompile(`^[0-9a-f-]{36}/(cover\.[a-z]+|thumb\.jpg|[0-9a-f-]{36}/[0-9]{3,4}\.(jpg|jpeg|png|gif|webp))$`)
+var filePathRe = regexp.MustCompile(`^([0-9a-f-]{36}/(cover\.[a-z]+|thumb\.jpg|[0-9a-f-]{36}/[0-9]{3,4}\.(jpg|jpeg|png|gif|webp))|other/[0-9a-f]{64}\.(jpg|png|gif|webp))$`)
 
 func (s *Server) sign(sid, path string) string {
 	mac := hmac.New(sha256.New, s.keys.sign)

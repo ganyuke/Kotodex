@@ -17,6 +17,19 @@
   </section>
 
   <section class="card">
+    <h2>Kotatsu sync</h2>
+    <dl class="facts">
+      <dt>Server address</dt><dd><code data-origin>{{$d.Address}}</code></dd>
+      <dt>Email (<abbr title="Any address that starts with your username and an @ works.">?</abbr>)</dt><dd><code data-sync-email="{{$me.Name}}">{{$me.Name}}@kotodex.home.arpa</code></dd>
+      <dt>Last sync</dt><dd>{{if $d.Synced}}{{ago $d.Synced}}{{else}}Not yet{{end}}</dd>
+    </dl>
+    <ol class="steps">
+      <li>In Kotatsu, open Settings, Services, Synchronization settings, and set the server address above.</li>
+      <li>Open Synchronization and sign in with the email above and your Kotodex password.</li>
+    </ol>
+  </section>
+
+  <section class="card">
     <h2>Signed-in devices (<abbr title="Kotodex signs out devices that go unused for 90 days.">?</abbr>)</h2>
     <table class="list compact">
       <thead><tr><th>Device</th><th>Type</th><th>Last used</th><th></th></tr></thead>
@@ -24,7 +37,7 @@
       {{range $d.Sessions}}
       <tr>
         <td class="agent" title="{{.Agent}}">{{.Agent}}</td>
-        <td>{{if eq .Kind "kotatsu"}}Kotatsu{{else}}Browser{{end}}</td>
+        <td>{{if eq .Kind "kotatsu"}}Kotatsu{{else if eq .Kind "sync"}}Kotatsu sync{{else}}Browser{{end}}</td>
         <td class="nowrap">{{if .Current}}This browser{{else}}{{ago .Used}}{{end}}</td>
         <td class="actions">{{if not .Current}}<form method="post" action="/settings/sign-out"><input type="hidden" name="hash" value="{{.Hash}}"><button class="small link">Sign out</button></form>{{end}}</td>
       </tr>
@@ -46,6 +59,19 @@
 </div>
 
 <div>
+  <section class="card" id="reading">
+    <h2>Reading activity</h2>
+    <form method="post" action="/settings/sharing" class="stack">
+      <fieldset class="choices">
+        <legend>Show others</legend>
+        <label class="check"><input type="radio" name="share" value="all"{{if eq $d.Share "all"}} checked{{end}}> <span>Everything I read (<abbr title="Includes manga from other sources in Kotatsu, with the source name.">?</abbr>)</span></label>
+        <label class="check"><input type="radio" name="share" value="kotodex"{{if eq $d.Share "kotodex"}} checked{{end}}> Only manga on Kotodex</label>
+        <label class="check"><input type="radio" name="share" value="none"{{if eq $d.Share "none"}} checked{{end}}> <span>Nothing (<abbr title="Others still see what you follow.">?</abbr>)</span></label>
+      </fieldset>
+      <button type="submit">Save</button>
+    </form>
+  </section>
+
   <section class="card">
     <h2>MangaDex account</h2>
     {{with $d.MangaDex}}
@@ -91,6 +117,7 @@
     <form method="post" action="/settings/server" class="stack">
       <label>Check every (minutes)<input type="number" name="interval" min="10" value="{{$d.Interval}}" required></label>
       <label class="check"><input type="checkbox" name="data_saver" value="1"{{if $d.DataSaver}} checked{{end}}> Download smaller, compressed pages</label>
+      <label class="check"><input type="checkbox" name="other_covers" value="1"{{if $d.OtherCovers}} checked{{end}}> <span>Load covers of manga from other sources</span> {{template "warning" "Kotodex downloads them from the sites people read on in Kotatsu, so those sites see this server's address. Off, they show as gray boxes."}}</label>
       <fieldset>
         <legend>Show in search</legend>
         <label class="check"><input type="checkbox" name="rating" value="safe"{{if index $d.Ratings "safe"}} checked{{end}}> Safe</label>

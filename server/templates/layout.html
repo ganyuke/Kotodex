@@ -18,6 +18,7 @@
     <a class="brand" href="/">Kotodex</a>
     <nav>
       <a href="/"{{if eq .Nav "library"}} class="on"{{end}}>Library</a>
+      <a href="/activity"{{if eq .Nav "activity"}} class="on"{{end}}>Activity</a>
       <a href="/downloads"{{if eq .Nav "downloads"}} class="on"{{end}}>Downloads</a>
       <a href="/settings"{{if eq .Nav "settings"}} class="on"{{end}}>Settings</a>
     </nav>
@@ -25,7 +26,7 @@
       <input type="search" name="q" value="{{.Search}}" placeholder="Search MangaDex or paste a link" aria-label="Search MangaDex">
     </form>
     <form action="/logout" method="post" class="signout">
-      <span class="who">{{.User.Name}}</span>
+      <a class="who" href="{{people .User.Name}}">{{.User.Name}}</a>
       <button class="link" type="submit">Sign out</button>
     </form>
   </div>

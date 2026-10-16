@@ -1,0 +1,61 @@
+{{/* Pieces several pages share. */}}
+{{define "thumb"}}{{if .Local}}<a href="/manga/{{.Local.ID}}">{{if .Cover}}<img class="thumb" src="{{.Cover}}" alt="" loading="lazy">{{else}}<span class="thumb"></span>{{end}}</a>{{else if .Cover}}<img class="thumb" src="{{.Cover}}" alt="" loading="lazy">{{else}}<span class="thumb"></span>{{end}}{{end}}
+{{define "mangaTitle"}}{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{if .Local.Authors}}<div class="muted">{{join .Local.Authors ", "}}</div>{{end}}{{else}}<span class="title">{{.Title}}</span>{{end}}{{end}}
+{{define "pager"}}{{if or .Prev .Next}}<nav class="pager" aria-label="Pages">{{if .Prev}}<a href="{{.Prev}}">Previous</a>{{else}}<span class="muted">Previous</span>{{end}}<span class="muted">{{.From}} to {{.To}} of {{.Total}}</span>{{if .Next}}<a href="{{.Next}}">Next</a>{{else}}<span class="muted">Next</span>{{end}}</nav>{{end}}{{end}}
+
+{{define "places"}}
+<table class="list">
+  <thead><tr><th class="thumbcol"></th><th>Manga</th><th>Source</th><th class="c-progress">Progress</th><th>Chapter</th><th>Last read</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td class="thumbcol">{{template "thumb" .}}</td>
+    <td>{{template "mangaTitle" .}}</td>
+    <td>{{.SourceName}}</td>
+    <td><progress class="meter" max="100" value="{{.Percent100}}" aria-label="Progress"></progress></td>
+    <td>{{.Where}}</td>
+    <td class="nowrap">{{agoMs .Updated}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{define "log"}}
+<table class="list">
+  <thead><tr><th>Day</th><th>Time</th><th>Manga</th><th>Source</th><th>Read</th><th class="num">Reading time</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td class="nowrap">{{dateMs .End}}</td>
+    <td class="nowrap">{{if eq .Start .End}}{{clock .End}}{{else}}{{clock .Start}} to {{clock .End}}{{end}}</td>
+    <td>{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}</td>
+    <td>{{.SourceName}}</td>
+    <td>{{.What}}</td>
+    <td class="num">{{if ne .Start .End}}{{minutes .Duration}}{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{define "follows"}}
+{{if .}}
+<table class="list">
+  <thead><tr><th class="thumbcol"></th><th>Manga</th><th>Status</th><th class="num">Downloaded</th><th class="num">Followers</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td class="thumbcol"><a href="/manga/{{.ID}}">{{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy">{{else}}<span class="thumb"></span>{{end}}</a></td>
+    <td><a class="title" href="/manga/{{.ID}}">{{.Title}}</a>{{if .Authors}}<div class="muted">{{join .Authors ", "}}</div>{{end}}</td>
+    <td>{{title .Status}}</td>
+    <td class="num">{{.Downloaded}} / {{.Known}}</td>
+    <td class="num">{{.Followers}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="empty">Not following anything.</p>{{end}}
+{{end}}
+
+{{define "warning"}}<span class="warning" title="{{.}}" role="img" aria-label="Warning: {{.}}"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg></span>{{end}}

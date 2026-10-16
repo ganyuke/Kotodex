@@ -1,0 +1,36 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1><a class="crumb" href="{{$d.Path}}">{{$d.Person.Name}}</a> <span class="muted">/</span> Lists</h1>
+  <form class="filters" method="get" action="{{$d.Path}}/lists/{{$d.List.ID}}" hx-get="{{$d.Path}}/lists/{{$d.List.ID}}" hx-trigger='submit, change from:"find select"' hx-target="body" hx-push-url="true">
+    <div class="seg">
+      {{range $d.Lists}}<a href="{{$d.Path}}/lists/{{.ID}}"{{if eq .ID $d.List.ID}} class="on"{{end}}>{{.Title}}<span class="count">{{.Count}}</span></a>{{end}}
+    </div>
+    <input type="search" name="q" value="{{$d.Query}}" placeholder="Filter" aria-label="Filter">
+    <select name="sort" aria-label="Sort">
+      <option value="">Kotatsu order</option>
+      <option value="added"{{if eq $d.Sort "added"}} selected{{end}}>Recently added</option>
+      <option value="title"{{if eq $d.Sort "title"}} selected{{end}}>Title</option>
+    </select>
+  </form>
+</div>
+{{if $d.Rows}}
+<table class="list">
+  <thead><tr><th class="thumbcol"></th><th>Manga</th><th>Source</th><th class="c-progress">Progress</th><th>Chapter</th><th>Added</th></tr></thead>
+  <tbody>
+  {{range $d.Rows}}
+  <tr>
+    <td class="thumbcol">{{template "thumb" .}}</td>
+    <td>{{template "mangaTitle" .}}{{if .Pinned}} <span class="pill">Pinned</span>{{end}}</td>
+    <td>{{.SourceName}}</td>
+    <td><progress class="meter" max="100" value="{{if .Place}}{{.Place.Percent100}}{{else}}0{{end}}" aria-label="Progress"></progress></td>
+    <td>{{if .Place}}{{.Place.Where}}{{else}}<span class="muted">Not started</span>{{end}}</td>
+    <td class="nowrap">{{dateMs .Added}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{template "pager" $d.Pager}}
+{{else if $d.Query}}<p class="empty">No matches.</p>
+{{else}}<p class="empty">Nothing here yet.</p>{{end}}
+{{end}}

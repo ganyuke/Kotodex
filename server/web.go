@@ -229,15 +229,33 @@ func (s *Server) loadTemplates() {
 			return strings.ToUpper(s[:1]) + s[1:]
 		},
 		"join": strings.Join,
+		// Synced times are in milliseconds.
+		"agoMs": func(ms int64) string {
+			if ms == 0 {
+				return "never"
+			}
+			return ago(time.Since(time.UnixMilli(ms)))
+		},
+		"dateMs": func(ms int64) string {
+			t := time.UnixMilli(ms)
+			if t.Year() == time.Now().Year() {
+				return t.Format("Jan 2")
+			}
+			return t.Format("Jan 2, 2006")
+		},
+		"clock":   func(ms int64) string { return time.UnixMilli(ms).Format("3:04 PM") },
+		"minutes": minutes,
+		"plural":  plural,
+		"people":  func(name string) string { return "/people/" + url.PathEscape(name) },
 	}
 	s.pages = map[string]*template.Template{}
 	names, _ := fs.Glob(templateFS, "templates/*.html")
 	for _, n := range names {
 		name := strings.TrimSuffix(strings.TrimPrefix(n, "templates/"), ".html")
-		if name == "layout" {
+		if name == "layout" || name == "parts" {
 			continue
 		}
-		s.pages[name] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", n))
+		s.pages[name] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/parts.html", n))
 	}
 }
 
@@ -641,8 +659,9 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	if st.Current != nil && st.Current.MangaID == m.ID {
 		current = st.Current
 	}
+	reading := s.mangaReading(u, m, all)
 	s.render(w, r, "manga", pageData{Title: m.Title, Nav: "library", Data: map[string]any{
-		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current,
+		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current, "Reading": reading,
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": r.URL.RawQuery,
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
@@ -845,8 +864,11 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, errMsg s
 	for _, l := range s.db.userLangs(u.ID) {
 		myLangs[l] = true
 	}
+	var share string
+	var synced int64
+	s.db.QueryRow(`SELECT share,synced FROM users WHERE id=?`, u.ID).Scan(&share, &synced)
 	data := map[string]any{
-		"Sessions": sessions, "MangaDex": mdx, "Address": serverAddress(r),
+		"Sessions": sessions, "MangaDex": mdx, "Address": serverAddress(r), "Share": share, "Synced": synced,
 		"AllLangs": allLangs(), "MyLangs": myLangs,
 	}
 	if u.Admin {
@@ -855,6 +877,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, errMsg s
 		data["Users"] = users
 		data["Interval"] = int(st.Interval.Minutes())
 		data["DataSaver"] = st.DataSaver
+		data["OtherCovers"] = st.OtherCovers
 		ratings := map[string]bool{}
 		for _, r := range st.ContentRatings {
 			ratings[r] = true
@@ -932,8 +955,13 @@ func (s *Server) settingsServer(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("data_saver") == "1" {
 		dataSaver = "1"
 	}
+	otherCovers := "0"
+	if r.FormValue("other_covers") == "1" {
+		otherCovers = "1"
+	}
 	s.db.setSetting("interval", strconv.Itoa(interval))
 	s.db.setSetting("data_saver", dataSaver)
+	s.db.setSetting("other_covers", otherCovers)
 	s.db.setSetting("content_ratings", strings.Join(ratings, ","))
 	s.dl.Reschedule()
 	back(w, r, "/settings", "Saved.")
@@ -1019,6 +1047,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /chapter/{id}/download", s.web(false, s.chapterDownload))
 	mux.HandleFunc("POST /chapter/{id}/cancel", s.web(false, s.chapterCancel))
 	mux.HandleFunc("POST /chapter/{id}/delete", s.web(true, s.chapterDelete))
+	mux.HandleFunc("GET /activity", s.web(false, s.live(s.activityPage, nil)))
+	mux.HandleFunc("GET /people/{name}", s.web(false, s.profilePage))
+	mux.HandleFunc("GET /people/{name}/reading", s.web(false, s.readingPage))
+	mux.HandleFunc("GET /people/{name}/lists/{id}", s.web(false, s.listPage))
+	mux.HandleFunc("GET /people/{name}/log", s.web(false, s.logPage))
+	mux.HandleFunc("GET /people/{name}/following", s.web(false, s.followingPage))
 	mux.HandleFunc("GET /downloads", s.web(false, s.live(s.downloadsPage, func(*http.Request) bool { return true })))
 	mux.HandleFunc("POST /downloads/check", s.web(false, s.downloadsCheck))
 	mux.HandleFunc("POST /downloads/retry", s.web(false, s.downloadsRetry))
@@ -1028,6 +1062,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /settings/mangadex", s.web(false, s.settingsMangaDex))
 	mux.HandleFunc("POST /settings/mangadex/unlink", s.web(false, s.settingsMangaDexUnlink))
 	mux.HandleFunc("POST /settings/languages", s.web(false, s.settingsLanguages))
+	mux.HandleFunc("POST /settings/sharing", s.web(false, s.settingsSharing))
 	mux.HandleFunc("POST /settings/server", s.web(true, s.settingsServer))
 	mux.HandleFunc("POST /settings/users", s.web(true, s.settingsAddUser))
 	mux.HandleFunc("POST /settings/users/{id}/password", s.web(true, s.settingsResetPassword))
@@ -1040,6 +1075,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/manga/{id}", s.api(s.apiManga))
 	mux.HandleFunc("GET /api/v1/chapters/{id}/pages", s.api(s.apiPages))
 	mux.HandleFunc("GET /api/v1/tags", s.api(s.apiTags))
+	// Kotatsu's sync, at the paths the app asks for.
+	mux.HandleFunc("POST /auth", s.syncAuth)
+	mux.HandleFunc("GET /resource/history", s.syncAPI(s.syncHistory))
+	mux.HandleFunc("POST /resource/history", s.syncAPI(s.syncHistory))
+	mux.HandleFunc("GET /resource/favourites", s.syncAPI(s.syncFavourites))
+	mux.HandleFunc("POST /resource/favourites", s.syncAPI(s.syncFavourites))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	// Anything else. The header shows when signed in.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

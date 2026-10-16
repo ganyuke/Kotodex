@@ -80,5 +80,17 @@ class Api(private val server: String, private val token: String = "") {
             if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://$s"
             return s
         }
+
+        /**
+         * What to type as the email in Kotatsu's sync sign-in. Kotatsu only
+         * takes addresses ending in 2 to 6 letters, so servers reached by IP
+         * address or a bare name get a reserved name that can never be real.
+         * The server only reads the part before the "@".
+         */
+        fun syncEmail(server: String, username: String): String {
+            val host = runCatching { java.net.URI(server).host }.getOrNull().orEmpty()
+            val domain = if (Regex("^[A-Z0-9.-]+\\.[A-Z]{2,6}$", RegexOption.IGNORE_CASE).matches(host)) host else "kotodex.home.arpa"
+            return "$username@$domain"
+        }
     }
 }

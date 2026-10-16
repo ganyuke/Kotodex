@@ -15,6 +15,7 @@ Follow manga on MangaDex and have new chapters downloaded to your own server, th
 - Read downloaded chapters in Kotatsu, with its favorites, history, and new chapter notifications working like any other source.
 - Give each person their own account with their own follows, and see or sign out the devices on each account.
 - Pick which languages to download for each manga you follow, and download a manga's whole back catalog in one language from its page.
+- See what everyone on the server is reading, with each person's progress, lists, and a year of reading time, once Kotatsu syncs with Kotodex.
 
 Kotodex only downloads chapters that come out after you follow a manga. To grab the older ones, pick a language on the manga's page and use "Download all", e.g. "Download all English chapters". When two groups upload the same chapter, Kotodex downloads the first upload and lists the other one so you can download it by hand.
 
@@ -33,6 +34,13 @@ To read on your phone, install the plugin APK, open it, and sign in with the ser
 - Linking a MangaDex account needs a personal API client. Create one on mangadex.org under Settings, API Clients, and wait for it to be approved.
 - With a linked MangaDex account, Kotodex follows whatever you follow on MangaDex. Following or unfollowing something in Kotodex overrides that for one manga, and the reset button next to Follow on the manga's page goes back to matching MangaDex. Kotodex never changes your follows on MangaDex.
 - MangaDex chapters from official publishers only link to the publisher's site. Kotodex can't download those and leaves them out.
+
+To track reading, point Kotatsu's sync at Kotodex. In Kotatsu, open Settings, Services, Synchronization settings and set the server address. Then open Synchronization and sign in with the email shown under Settings in Kotodex (or in the plugin app) and your Kotodex password. Your reading then shows up on your profile and under Activity.
+
+- Kotodex becomes Kotatsu's sync server, so history and favorites sync between your phones through it. Kotatsu takes one sync server at a time.
+- Pick who sees your reading under Settings: everything, only manga on Kotodex, or nothing. What you follow shows either way.
+- Kotatsu only signs in with an email address. Kotodex reads the part before the @ as the username, so a username with spaces or symbols other than `._%+-` can't sign in to sync.
+- Reading done offline shows up as one entry once the phone syncs again.
 
 Set your usual languages under Settings. Every manga you follow uses those unless you pick languages for it on the manga's page. The reset button there goes back to your usual ones. When people follow the same manga in different languages, Kotodex downloads every language someone wants and keeps one copy of each chapter.
 
@@ -120,5 +128,6 @@ The server connects to:
 - `api.mangadex.org` and `auth.mangadex.org` for search, chapter lists, and account follows
 - `uploads.mangadex.org` for covers
 - MangaDex@Home image servers (`*.mangadex.network`) for pages, and `api.mangadex.network` to report how each page download went, which MangaDex requires
+- If an admin turns on loading covers of manga from other sources under Settings, the sites those covers are on, as synced from people's Kotatsu
 
 The plugin only connects to your Kotodex server.

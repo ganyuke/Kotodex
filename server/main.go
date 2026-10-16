@@ -23,6 +23,7 @@ type Server struct {
 	dl       *Downloader
 	keys     *Keys
 	mangaDir string
+	covers   *Covers
 	limiter  *loginLimiter
 	pages    map[string]*template.Template
 	closing  chan struct{} // closed when the server shuts down
@@ -104,6 +105,7 @@ func main() {
 		dl:       newDownloader(db, mdx, keys, mangaDir),
 		keys:     keys,
 		mangaDir: mangaDir,
+		covers:   newCovers(mangaDir),
 		limiter:  &loginLimiter{fails: map[string][]time.Time{}},
 		closing:  make(chan struct{}),
 	}
@@ -114,6 +116,7 @@ func main() {
 	// After the first signal, a second one exits right away.
 	context.AfterFunc(ctx, stop)
 	go s.dl.Run(ctx)
+	go s.covers.Run(ctx)
 	go func() {
 		for {
 			db.deleteIdleSessions()

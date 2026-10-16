@@ -53,4 +53,11 @@ class ScreenTest {
         assertEquals("http://192.168.1.20:8080", Api.normalizeServer(" 192.168.1.20:8080/ "))
         assertEquals("https://manga.example.com", Api.normalizeServer("https://manga.example.com/"))
     }
+
+    @Test fun syncEmail() {
+        assertEquals("mio@manga.example.com", Api.syncEmail("https://manga.example.com", "mio"))
+        assertEquals("mio@kotodex.home.arpa", Api.syncEmail("http://192.168.1.20:8080", "mio"))
+        assertEquals("mio@kotodex.home.arpa", Api.syncEmail("http://nas:8080", "mio"))
+        assertEquals("mio@kotodex.home.arpa", Api.syncEmail("https://manga.photography", "mio"))
+    }
 }

@@ -6,6 +6,10 @@
 // from proxy headers.
 htmx.onLoad((el) => {
   el.querySelectorAll("[data-origin]").forEach((o) => (o.textContent = location.origin));
+  // Kotatsu's sign-in only takes an address ending in 2 to 6 letters. Use
+  // this site's name when it fits, otherwise a name that can never be real.
+  const host = /^[a-z0-9.-]+\.[a-z]{2,6}$/i.test(location.hostname) ? location.hostname : "kotodex.home.arpa";
+  el.querySelectorAll("[data-sync-email]").forEach((e) => (e.textContent = e.dataset.syncEmail + "@" + host));
 });
 
 // The server ends the live stream with an "end" event when the page is gone

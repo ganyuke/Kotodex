@@ -13,10 +13,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.AlternateEmail
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import org.nextcolor.kotodex.Api
 
 data class ScreenState(
     val signedIn: Boolean,
@@ -139,6 +143,11 @@ fun MainScreen(
                         },
                     ) { Text("Open Kotatsu") }
                 }
+
+                item { SectionHeader("Kotatsu sync") }
+                item { Row(Icons.Rounded.Sync, "Server address", state.server, 0, 3) }
+                item { Row(Icons.Rounded.AlternateEmail, "Email", Api.syncEmail(state.server, state.username), 1, 3) }
+                item { Row(Icons.Rounded.Settings, "In Kotatsu", "Settings, Services, Synchronization settings", 2, 3) }
 
                 val apps = state.requestedApps.map { it to true } + state.allowedApps.map { it to false }
                 if (apps.isNotEmpty()) {

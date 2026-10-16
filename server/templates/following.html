@@ -1,0 +1,7 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1><a class="crumb" href="{{$d.Path}}">{{$d.Person.Name}}</a> <span class="muted">/</span> Following<span class="count">{{$d.Count}}</span></h1>
+</div>
+{{template "follows" $d.Rows}}
+{{end}}

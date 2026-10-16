@@ -9,6 +9,10 @@
   --accent-soft: #fbe9df;
   --bad: #b91c1c;
   --ok-soft: #e8f3e8;
+  --heat1: #f6c9ae;
+  --heat2: #eb9563;
+  --heat3: #d4602a;
+  --heat4: #9a330a;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +27,10 @@
     --accent-soft: #3a2316;
     --bad: #f87171;
     --ok-soft: #1f2c1f;
+    --heat1: #5a3220;
+    --heat2: #8f4520;
+    --heat3: #c25a25;
+    --heat4: #f07a3e;
     color-scheme: dark;
   }
 }
@@ -171,6 +179,7 @@ tr.state0 td { color: var(--muted); }
 
 /* Downloads */
 .split { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+.split > * { min-width: 0; }
 .split aside .facts { margin: 0; }
 .now { margin-bottom: 0; }
 .now-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 12px; min-height: 20px; }
@@ -201,3 +210,48 @@ progress.meter::-moz-progress-bar { background: var(--accent); border-radius: 99
 button.icon-button { padding: 0; width: 32px; justify-content: center; }
 button.icon-button.small { padding: 0; width: 26px; }
 .icon { display: block; }
+
+/* Reading activity */
+.push { margin-left: auto; }
+.section-head { margin: 24px 0 10px; }
+.section-head h2, .section-head h3 { margin: 0; }
+h1 .crumb { color: var(--muted); font-weight: 400; }
+.c-progress { width: 200px; }
+.fixed .c-you { width: 130px; }
+.thumb.small { width: 28px; height: 40px; }
+.my-progress { max-width: 560px; margin: 0 0 16px; display: flex; flex-direction: column; gap: 6px; }
+.info .my-progress .muted { margin: 0; }
+.info .my-progress .push { margin-left: auto; }
+tr.mine td { background: var(--accent-soft); }
+fieldset.choices { flex-direction: column; flex-wrap: nowrap; gap: 6px; }
+.scroll { overflow-x: auto; margin-bottom: 16px; }
+.feed { table-layout: fixed; }
+@media (max-width: 900px) { table.feed { display: table; min-width: 760px; } }
+.feed td { overflow-wrap: anywhere; }
+.feed .thumbcol { width: 52px; }
+.feed .c-activity { width: 34%; }
+.feed .c-person { width: 110px; }
+.feed .c-time { width: 110px; }
+.feed .c-when { width: 90px; }
+
+/* Lists as shelves of covers */
+.shelf-section { margin-bottom: 18px; }
+.shelf-section .section-head { margin: 0 0 8px; }
+.shelf { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 4px; }
+.tile { width: 76px; flex: none; display: flex; flex-direction: column; gap: 4px; color: var(--text); font-size: 12px; line-height: 1.3; }
+.tile:hover { text-decoration: none; }
+.tile .cover { display: block; width: 76px; height: 108px; border-radius: 4px; background: var(--line); object-fit: cover; }
+.tile progress.meter { height: 3px; }
+.tile .name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Reading per day for the past year */
+.heatmap { margin: 0 0 8px; overflow-x: auto; }
+.heatmap svg { display: block; }
+.heatmap text { font-size: 10px; fill: var(--muted); }
+.heatmap .h0 { fill: var(--line); }
+.heatmap .h1 { fill: var(--heat1); }
+.heatmap .h2 { fill: var(--heat2); }
+.heatmap .h3 { fill: var(--heat3); }
+.heatmap .h4 { fill: var(--heat4); }
+.heatmap figcaption { font-size: 12px; margin-top: 4px; }
+.warning { display: inline-flex; color: var(--bad); cursor: help; }

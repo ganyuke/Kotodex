@@ -1,0 +1,22 @@
+{{define "content"}}
+{{$d := .Data}}
+<div class="head">
+  <h1><a class="crumb" href="{{$d.Path}}">{{$d.Person.Name}}</a> <span class="muted">/</span> Reading</h1>
+  <form class="filters" method="get" action="{{$d.Path}}/reading" hx-get="{{$d.Path}}/reading" hx-trigger='submit, change from:"find select"' hx-target="body" hx-push-url="true">
+    <div class="seg">
+      <a href="{{$d.Path}}/reading"{{if ne $d.Tab "finished"}} class="on"{{end}}>In progress<span class="count">{{$d.InProgress}}</span></a>
+      <a href="{{$d.Path}}/reading?tab=finished"{{if eq $d.Tab "finished"}} class="on"{{end}}>Finished<span class="count">{{$d.Finished}}</span></a>
+    </div>
+    {{if eq $d.Tab "finished"}}<input type="hidden" name="tab" value="finished">{{end}}
+    <input type="search" name="q" value="{{$d.Query}}" placeholder="Filter" aria-label="Filter">
+    <select name="sort" aria-label="Sort">
+      <option value="">Last read</option>
+      <option value="title"{{if eq $d.Sort "title"}} selected{{end}}>Title</option>
+      <option value="progress"{{if eq $d.Sort "progress"}} selected{{end}}>Progress</option>
+    </select>
+  </form>
+</div>
+{{if $d.Rows}}{{template "places" $d.Rows}}{{template "pager" $d.Pager}}
+{{else if $d.Query}}<p class="empty">No matches.</p>
+{{else}}<p class="empty">Nothing here yet.</p>{{end}}
+{{end}}
