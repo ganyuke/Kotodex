@@ -1,0 +1,4 @@
+Chapter counts on manga pages and the library update without reloading.
+The downloads tables keep their columns while chapters finish.
+Manga pages start on your languages, and "Download all" downloads the languages shown.
+Manga nobody follows say to follow them to fetch their chapters.
