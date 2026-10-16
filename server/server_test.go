@@ -763,7 +763,7 @@ func TestNoticeShowsOnce(t *testing.T) {
 		t.Fatal("notice lost")
 	}
 	res, _ = client.Get(ts.URL + "/manga/" + mangaA + "?notice=Sign+in+at+evil.example")
-	if strings.Contains(page(res), "evil.example") {
+	if strings.Contains(page(res), `<p class="notice">`) {
 		t.Fatal("notice taken from URL")
 	}
 }
@@ -780,7 +780,8 @@ func openStream(t *testing.T, url, token string) *sseStream {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept", "text/html, text/event-stream") // what htmx sends
+	req.Header.Set(liveHeader, "1")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -838,7 +839,12 @@ func TestLiveUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(ev, "<div data-live>") || strings.Contains(ev, "<html") || !strings.Contains(ev, "Nothing waiting to download.") {
+	for _, id := range []string{"live-actions", "live-now", "live-queue", "live-summary", "live-history"} {
+		if !strings.Contains(ev, `<div id="`+id+`" hx-swap-oob="innerMorph">`) {
+			t.Fatalf("first event lacks %s: %s", id, ev)
+		}
+	}
+	if strings.Contains(ev, "<html") || !strings.Contains(ev, "Nothing waiting to download.") {
 		t.Fatalf("first event: %s", ev)
 	}
 
@@ -846,6 +852,10 @@ func TestLiveUpdates(t *testing.T) {
 	s.dl.Wake()
 	if ev, err = st.next(); err != nil || !strings.Contains(ev, "/chapter/"+chapter1+"/cancel") {
 		t.Fatalf("after queueing: %v %s", err, ev)
+	}
+	// Only the sections that changed are sent.
+	if strings.Contains(ev, `id="live-now"`) || strings.Contains(ev, `id="live-actions"`) {
+		t.Fatalf("unchanged sections sent again: %s", ev)
 	}
 
 	s.db.deleteSession(token)
@@ -906,8 +916,107 @@ func TestLiveProgress(t *testing.T) {
 	}
 	s.dl.progress(func(p *Progress) { p.Done = 7 })
 	ev, err := st.next()
-	if err != nil || ev == first {
+	if err != nil || ev == first || !strings.Contains(ev, `value="7"`) {
 		t.Fatalf("progress didn't update the page: %v %s", err, ev)
+	}
+	if strings.Contains(ev, `id="live-queue"`) || strings.Contains(ev, `id="live-history"`) {
+		t.Fatalf("progress resent sections that didn't change: %s", ev)
+	}
+}
+
+func TestLiveLibraryAndMangaHeader(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	lib := openStream(t, ts.URL+"/", token)
+	manga := openStream(t, ts.URL+"/manga/"+mangaA, token)
+	for _, st := range []*sseStream{lib, manga} {
+		if _, err := st.next(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.db.Exec(`UPDATE chapters SET state=2, files='["001.jpg"]' WHERE id=?`, chapter2)
+	s.dl.Changed()
+	if ev, err := lib.next(); err != nil || !strings.Contains(ev, `id="live-library"`) || !strings.Contains(ev, "2 / 2") {
+		t.Fatalf("library didn't update: %v %s", err, ev)
+	}
+	ev, err := manga.next()
+	if err != nil || !strings.Contains(ev, `id="live-facts"`) || !strings.Contains(ev, "2 of 2 chapters") || !strings.Contains(ev, `id="live-langs"`) {
+		t.Fatalf("manga header didn't update: %v %s", err, ev)
+	}
+}
+
+func TestMangaPageLanguages(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	s.db.insertChapter(&Chapter{ID: "c3", MangaID: mangaA, Number: "11", Lang: "fr", Title: "Chapitre onze", Published: 300})
+	get := func(path string) string {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return string(b)
+	}
+	langs := s.db.userLangs(uid)
+	if len(langs) != 1 || langs[0] != "en" {
+		t.Fatalf("seed user languages: %v", langs)
+	}
+	page := get("/manga/" + mangaA)
+	if !strings.Contains(page, `<option value="en" selected>`) || strings.Contains(page, "Chapitre onze") {
+		t.Fatal("page should start on the user's language")
+	}
+	if !strings.Contains(page, "Download all English chapters") {
+		t.Fatal("download all should name the shown language")
+	}
+	page = get("/manga/" + mangaA + "?lang=all")
+	if !strings.Contains(page, `<option value="all" selected>`) || !strings.Contains(page, "Chapitre onze") {
+		t.Fatal("all languages should show every chapter")
+	}
+
+	// Several languages of your own get their own entry.
+	s.db.setFollowLangs(uid, mangaA, []string{"en", "fr"})
+	page = get("/manga/" + mangaA)
+	if !strings.Contains(page, `<option value="" selected>Your languages (1 of 3 downloaded)`) || !strings.Contains(page, "Chapitre onze") {
+		t.Fatal("several languages should start on your languages")
+	}
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse(ts.URL)
+	jar.SetCookies(u, []*http.Cookie{{Name: sessionCookie, Value: token}})
+	client := &http.Client{Jar: jar}
+	if _, err := client.PostForm(ts.URL+"/manga/"+mangaA+"/download-all", url.Values{"lang": {"en", "fr"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{chapter2, "c3"} {
+		var state int
+		s.db.QueryRow(`SELECT state FROM chapters WHERE id=?`, id).Scan(&state)
+		if state != stateQueued {
+			t.Fatalf("%s not queued by download all: %d", id, state)
+		}
+	}
+}
+
+func TestMangaPageNotFollowed(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	other := "2b3c4d5e-0000-4000-8000-000000000002"
+	s.db.upsertManga(&Manga{ID: other, Title: "Nobody follows"})
+	req, _ := http.NewRequest("GET", ts.URL+"/manga/"+other, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(b), "Follow this manga to fetch its chapters.") || strings.Contains(string(b), "Fetching") {
+		t.Fatal("unfollowed manga should say to follow it")
 	}
 }
 
@@ -965,6 +1074,26 @@ func TestLiveOutlivesReadTimeout(t *testing.T) {
 	}
 }
 
+func TestBoostedNavigationGetsPage(t *testing.T) {
+	s, ts := testServer(t)
+	uid := seed(t, s)
+	token, _ := s.db.createSession(uid, "browser", "test")
+	// A boosted link with the SSE extension loaded asks like this.
+	req, _ := http.NewRequest("GET", ts.URL+"/downloads", nil)
+	req.Header.Set("Accept", "text/html, text/event-stream")
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") || !strings.Contains(string(b), "<html") {
+		t.Fatalf("link got %q instead of the page", ct)
+	}
+}
+
 func TestLivePageStillPlain(t *testing.T) {
 	s, ts := testServer(t)
 	uid := seed(t, s)
@@ -977,7 +1106,7 @@ func TestLivePageStillPlain(t *testing.T) {
 	}
 	b, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), "<div data-live>") {
+	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), `<div id="live-chapters">`) || !strings.Contains(string(b), `hx-sse:connect="/manga/`+mangaA+`"`) {
 		t.Fatal("manga page should be a full page with its live section")
 	}
 }
@@ -996,7 +1125,7 @@ func TestShutdownEndsStreams(t *testing.T) {
 	go func() { done <- serve(ctx, s.httpServer(), ln) }()
 
 	req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/downloads", nil)
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(liveHeader, "1")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

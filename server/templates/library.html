@@ -2,26 +2,31 @@
 {{$d := .Data}}
 <div class="head">
   <h1>Library</h1>
-  <form class="filters" method="get" action="/">
+  <form class="filters" method="get" action="/" hx-get="/" hx-trigger='submit, change from:"find select"' hx-target="body" hx-push-url="true">
     <div class="seg">
       <a href="/?sort={{$d.Sort}}"{{if ne $d.Show "all"}} class="on"{{end}}>Following</a>
       <a href="/?show=all&amp;sort={{$d.Sort}}"{{if eq $d.Show "all"}} class="on"{{end}}>Everyone's</a>
     </div>
     {{if eq $d.Show "all"}}<input type="hidden" name="show" value="all">{{end}}
     <input type="search" name="q" value="{{$d.Query}}" placeholder="Filter">
-    <select name="sort" data-autosubmit aria-label="Sort">
+    <select name="sort" aria-label="Sort">
       <option value="">Recently updated</option>
       <option value="title"{{if eq $d.Sort "title"}} selected{{end}}>Title</option>
       <option value="added"{{if eq $d.Sort "added"}} selected{{end}}>Recently added</option>
     </select>
   </form>
 </div>
+<div id="live-library">{{template "live-library" .}}</div>
+{{end}}
+
+{{define "live-library"}}
+{{$d := .Data}}
 {{if $d.Rows}}
 <table class="list">
   <thead><tr><th class="thumbcol"></th><th>Title</th><th>Status</th><th class="num">Downloaded</th><th class="num">Queued</th><th>Last download</th><th class="num">Followers</th><th></th></tr></thead>
   <tbody>
   {{range $d.Rows}}
-  <tr>
+  <tr id="m-{{.ID}}">
     <td class="thumbcol"><a href="/manga/{{.ID}}">{{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy">{{else}}<span class="thumb"></span>{{end}}</a></td>
     <td><a href="/manga/{{.ID}}" class="title">{{.Title}}</a>{{if .Authors}}<div class="muted">{{join .Authors ", "}}</div>{{end}}</td>
     <td>{{title .Status}}</td>

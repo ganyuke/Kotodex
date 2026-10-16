@@ -1,91 +1,101 @@
 {{define "content"}}
-{{$d := .Data}}
 <div class="head">
   <h1>Downloads</h1>
-  <div class="buttons">
-    <form method="post" action="/downloads/check"><button class="secondary">Check for new chapters</button></form>
-    {{if $d.Failed}}<form method="post" action="/downloads/retry"><button class="secondary">Retry failed</button></form>{{end}}
-  </div>
+  <div class="buttons" id="live-actions">{{template "live-actions" .}}</div>
 </div>
-{{template "live" .}}
-{{end}}
-
-{{define "live"}}
-{{$d := .Data}}
-<div data-live>
 <div class="split">
   <div>
-    <section class="card now">
-      {{with $d.Status.Current}}
-      <div class="now-head">
-        <div><a class="title" href="/manga/{{.MangaID}}">{{.MangaTitle}}</a> <span class="muted">{{.Label}}</span></div>
-        <div class="muted">{{.Done}} of {{.Total}} pages · {{size .Bytes}}</div>
-      </div>
-      <progress class="bar" max="{{.Total}}" value="{{.Done}}">{{percent .Done .Total}}%</progress>
-      {{else}}
-      <p class="muted idle">Nothing downloading.</p>
-      {{end}}
-    </section>
-
-    <h2>Queue{{if $d.Queue}} <span class="count">{{len $d.Queue}}</span>{{end}}</h2>
-    {{if $d.Queue}}
-    <table class="list compact">
-      <thead><tr><th>Manga</th><th>Chapter</th><th>Language</th><th>Group</th><th>Published</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-      {{range $d.Queue}}
-      <tr>
-        <td><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
-        <td class="nowrap">{{chapterLabel .}}</td>
-        <td>{{lang .Lang}}</td>
-        <td>{{.Group}}</td>
-        <td class="nowrap">{{date .Published}}</td>
-        <td>
-          {{if and $d.Status.Current (eq $d.Status.Current.ChapterID .ID)}}<span class="pill active">Downloading</span>
-          {{else if eq .State 3}}<span class="pill bad">Failed</span> <span class="muted">{{.Error}}</span>
-          {{else if .Error}}<span class="pill">Retrying</span> <span class="muted">{{.Error}}</span>
-          {{else}}<span class="pill">Queued</span>{{end}}
-        </td>
-        <td class="actions">
-          {{if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/downloads"><button class="small link">Retry</button></form>{{end}}
-          <form method="post" action="/chapter/{{.ID}}/cancel"><input type="hidden" name="next" value="/downloads"><button class="small link">Cancel</button></form>
-        </td>
-      </tr>
-      {{end}}
-      </tbody>
-    </table>
-    {{else}}
-    <p class="empty small">Nothing waiting to download.</p>
-    {{end}}
+    <section class="card now" id="live-now">{{template "live-now" .}}</section>
+    <div id="live-queue">{{template "live-queue" .}}</div>
   </div>
-
-  <aside class="card">
-    <dl class="facts">
-      <dt>Checking</dt><dd>{{if $d.Status.Checking}}{{$d.Status.Checking}}{{else}}<span class="muted">Idle</span>{{end}}</dd>
-      <dt>Last check</dt><dd>{{ago $d.LastCheck}}</dd>
-      <dt>Next check</dt><dd>{{until $d.NextCheck}}</dd>
-      <dt>Queued</dt><dd>{{$d.Queued}}</dd>
-      <dt>Failed</dt><dd>{{if $d.Failed}}<span class="bad">{{$d.Failed}}</span>{{else}}0{{end}}</dd>
-      <dt>Downloaded</dt><dd>{{$d.TotalChapters}} chapters</dd>
-      <dt>Disk space</dt><dd>{{size $d.TotalSize}}</dd>
-    </dl>
-  </aside>
+  <aside class="card" id="live-summary">{{template "live-summary" .}}</aside>
 </div>
+<div id="live-history">{{template "live-history" .}}</div>
+{{end}}
 
+{{define "live-actions"}}
+<form method="post" action="/downloads/check"><button class="secondary">Check for new chapters</button></form>
+{{if .Data.Failed}}<form method="post" action="/downloads/retry"><button class="secondary">Retry failed</button></form>{{end}}
+{{end}}
+
+{{define "live-now"}}
+{{with .Data.Status.Current}}
+<div class="now-head">
+  <div class="ellipsis"><a class="title" href="/manga/{{.MangaID}}">{{.MangaTitle}}</a> <span class="muted">{{.Label}}</span></div>
+  <div class="muted nowrap">{{.Done}} of {{.Total}} pages · {{size .Bytes}}</div>
+</div>
+<progress class="meter" max="{{.Total}}" value="{{.Done}}">{{percent .Done .Total}}%</progress>
+{{else}}
+<div class="now-head"><div class="muted">Nothing downloading.</div></div>
+<progress class="meter" max="1" value="0"></progress>
+{{end}}
+{{end}}
+
+{{define "live-queue"}}
+{{$d := .Data}}
+<h2>Queue{{if $d.Queue}} <span class="count">{{len $d.Queue}}</span>{{end}}</h2>
+{{if $d.Queue}}
+<table class="list compact fixed queue">
+  <colgroup><col><col class="c-chapter"><col class="c-lang"><col class="c-group"><col class="c-date"><col class="c-status"><col class="c-actions"></colgroup>
+  <thead><tr><th>Manga</th><th>Chapter</th><th>Language</th><th>Group</th><th>Published</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Queue}}
+  <tr id="q-{{.ID}}">
+    <td title="{{.MangaTitle}}"><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
+    <td>{{chapterLabel .}}</td>
+    <td>{{lang .Lang}}</td>
+    <td title="{{.Group}}">{{.Group}}</td>
+    <td>{{date .Published}}</td>
+    <td{{if .Error}} title="{{.Error}}"{{end}}>
+      {{if and $d.Status.Current (eq $d.Status.Current.ChapterID .ID)}}<span class="pill active">Downloading</span>
+      {{else if eq .State 3}}<span class="pill bad">Failed</span> <span class="muted">{{.Error}}</span>
+      {{else if .Error}}<span class="pill">Retrying</span> <span class="muted">{{.Error}}</span>
+      {{else}}<span class="pill">Queued</span>{{end}}
+    </td>
+    <td class="actions">
+      {{if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/downloads"><button class="small link">Retry</button></form>{{end}}
+      <form method="post" action="/chapter/{{.ID}}/cancel"><input type="hidden" name="next" value="/downloads"><button class="small link">Cancel</button></form>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty small">Nothing waiting to download.</p>
+{{end}}
+{{end}}
+
+{{define "live-summary"}}
+{{$d := .Data}}
+<dl class="facts">
+  <dt>Checking</dt><dd>{{if $d.Status.Checking}}{{$d.Status.Checking}}{{else}}<span class="muted">Idle</span>{{end}}</dd>
+  <dt>Last check</dt><dd>{{ago $d.LastCheck}}</dd>
+  <dt>Next check</dt><dd>{{until $d.NextCheck}}</dd>
+  <dt>Queued</dt><dd>{{$d.Queued}}</dd>
+  <dt>Failed</dt><dd>{{if $d.Failed}}<span class="bad">{{$d.Failed}}</span>{{else}}0{{end}}</dd>
+  <dt>Downloaded</dt><dd>{{$d.TotalChapters}} chapters</dd>
+  <dt>Disk space</dt><dd>{{size $d.TotalSize}}</dd>
+</dl>
+{{end}}
+
+{{define "live-history"}}
+{{$d := .Data}}
 <h2>History</h2>
 {{if $d.History}}
-<table class="list compact">
+<table class="list compact fixed history">
+  <colgroup><col class="c-when"><col><col class="c-chapter"><col><col class="c-lang"><col class="c-group"><col class="c-pages"><col class="c-size"></colgroup>
   <thead><tr><th>Downloaded</th><th>Manga</th><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th class="num">Pages</th><th class="num">Size</th></tr></thead>
   <tbody>
   {{range $d.History}}
-  <tr>
-    <td class="nowrap" title="{{date .Downloaded}}">{{ago .Downloaded}}</td>
-    <td><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
-    <td class="nowrap">{{chapterLabel .}}</td>
-    <td>{{.Title}}</td>
+  <tr id="h-{{.ID}}">
+    <td title="{{date .Downloaded}}">{{ago .Downloaded}}</td>
+    <td title="{{.MangaTitle}}"><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
+    <td>{{chapterLabel .}}</td>
+    <td title="{{.Title}}">{{.Title}}</td>
     <td>{{lang .Lang}}</td>
-    <td>{{.Group}}</td>
+    <td title="{{.Group}}">{{.Group}}</td>
     <td class="num">{{.Pages}}</td>
-    <td class="num nowrap">{{size .Size}}</td>
+    <td class="num">{{size .Size}}</td>
   </tr>
   {{end}}
   </tbody>
@@ -98,5 +108,4 @@
 {{else}}
 <p class="empty small">Nothing downloaded yet.</p>
 {{end}}
-</div>
 {{end}}

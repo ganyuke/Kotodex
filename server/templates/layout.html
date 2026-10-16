@@ -6,8 +6,12 @@
 <title>{{.Title}} - Kotodex</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<meta name="htmx-config" content='{"includeIndicatorCSS":false,"extensions":"sse"}'>
+<script src="/static/htmx-4.0.0.min.js"></script>
+<script src="/static/hx-sse-4.0.0.min.js"></script>
+<script src="/static/app.js" defer></script>
 </head>
-<body>
+<body hx-boost:inherited="true">
 {{if .User}}
 <header class="top">
   <div class="bar">
@@ -32,7 +36,7 @@
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
 {{template "content" .}}
 </main>
-<script src="/static/app.js"></script>
+{{with .LiveURL}}<div hidden hx-sse:connect="{{.}}" hx-sse:close="end" hx-headers='{"Kotodex-Live": "1"}'></div>{{end}}
 </body>
 </html>
 {{define "reseticon"}}<svg class="icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6 0 2.97-2.17 5.43-5 5.91v2.02c3.95-.49 7-3.85 7-7.93 0-4.42-3.58-8-8-8zm-6 8c0-1.65.67-3.15 1.76-4.24L6.34 7.34C4.9 8.79 4 10.79 4 13c0 4.08 3.05 7.44 7 7.93v-2.02c-2.83-.48-5-2.94-5-5.91z"/></svg>{{end}}

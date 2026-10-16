@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -278,6 +280,9 @@ type pageData struct {
 	Error  string
 	Notice string
 	Data   any
+	// LiveURL is where the page gets its live sections. Empty on pages
+	// without any.
+	LiveURL string
 }
 
 // errorPage shows msg as a page of its own, with the usual header and a way
@@ -286,7 +291,7 @@ type pageData struct {
 func (s *Server) errorPage(w http.ResponseWriter, r *http.Request, code int, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	if liveFragment(r) {
+	if liveCollector(r) != nil {
 		return // the stream ends and the page reloads into this
 	}
 	p := pageData{Title: msg, User: currentUser(r)}
@@ -305,13 +310,21 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p p
 		p.Notice = takeNotice(w, r)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if liveFragment(r) {
-		if err := s.pages[name].ExecuteTemplate(w, "live", p); err != nil {
-			log.Printf("render %s live: %v", name, err)
+	t := s.pages[name]
+	if sections := liveCollector(r); sections != nil {
+		for _, live := range liveNames(t) {
+			var b bytes.Buffer
+			if err := t.ExecuteTemplate(&b, live, p); err != nil {
+				log.Printf("render %s %s: %v", name, live, err)
+			}
+			sections[live] = bytes.TrimSpace(b.Bytes())
 		}
 		return
 	}
-	if err := s.pages[name].Execute(w, p); err != nil {
+	if len(liveNames(t)) > 0 {
+		p.LiveURL = r.URL.RequestURI()
+	}
+	if err := t.Execute(w, p); err != nil {
 		log.Printf("render %s: %v", name, err)
 	}
 }
@@ -349,7 +362,7 @@ const noticeCookie = "notice"
 
 // takeNotice reads the notice back left for this page and clears it.
 func takeNotice(w http.ResponseWriter, r *http.Request) string {
-	if r.Method != http.MethodGet || liveFragment(r) {
+	if r.Method != http.MethodGet || liveCollector(r) != nil {
 		return ""
 	}
 	c, err := r.Cookie(noticeCookie)
@@ -547,13 +560,8 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	}
 	all, _ := s.db.chapters(m.ID)
 	var size int64
-	filter := r.URL.Query().Get("lang")
-	var chapters []*Chapter
 	for _, c := range all {
 		size += c.Size
-		if filter == "" || c.Lang == filter {
-			chapters = append(chapters, c)
-		}
 	}
 	langs := s.db.mangaLangs(m.ID)
 	// Offer the follower's languages even if MangaDex has none of them yet.
@@ -579,6 +587,47 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 			langChoices = append(langChoices, LangCount{Code: l})
 		}
 	}
+	// Chapters in your languages unless the link picks one or "all". With
+	// one language of your own, that language is picked in the list.
+	mine := s.db.userLangs(u.ID)
+	if m.Following {
+		mine = slices.Sorted(maps.Keys(followLangs))
+	}
+	filter := r.URL.Query().Get("lang")
+	shown := mine
+	switch filter {
+	case "":
+		if len(mine) == 1 {
+			filter = mine[0]
+		} else if len(mine) == 0 {
+			filter = "all"
+		}
+	case "all":
+		shown = nil
+	default:
+		shown = []string{filter}
+	}
+	var chapters []*Chapter
+	for _, c := range all {
+		if shown == nil || slices.Contains(shown, c.Lang) {
+			chapters = append(chapters, c)
+		}
+	}
+	// The list offers every language with chapters, plus yours and the
+	// picked one so they show as picked even without chapters.
+	langOptions := slices.Clone(langs)
+	for _, l := range append(slices.Clone(mine), filter) {
+		if l != "all" && !slices.ContainsFunc(langOptions, func(o LangCount) bool { return o.Code == l }) {
+			langOptions = append(langOptions, LangCount{Code: l})
+		}
+	}
+	var mineCount LangCount
+	for _, l := range langs {
+		if slices.Contains(mine, l.Code) {
+			mineCount.Chapters += l.Chapters
+			mineCount.Downloaded += l.Downloaded
+		}
+	}
 	// Newest first on the page.
 	for i, j := 0, len(chapters)-1; i < j; i, j = i+1, j-1 {
 		chapters[i], chapters[j] = chapters[j], chapters[i]
@@ -595,6 +644,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "manga", pageData{Title: m.Title, Nav: "library", Data: map[string]any{
 		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current,
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
+		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": r.URL.RawQuery,
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
 		"FollowCustom": linked && s.db.followChoice(u.ID, m.ID),
 	}})
@@ -608,8 +658,18 @@ func (s *Server) mangaCheck(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
 	// One upload per chapter number and language, the earliest one, same as
 	// for new chapters. Other groups' uploads can still be picked by hand.
-	id, lang := r.PathValue("id"), r.FormValue("lang")
-	chapters, err := s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) AND (?='' OR c.lang=?) ORDER BY c.published`, id, lang, lang)
+	// No languages means all of them.
+	id := r.PathValue("id")
+	r.ParseForm()
+	langs := r.PostForm["lang"]
+	var chapters []*Chapter
+	var err error
+	if len(langs) == 0 {
+		chapters, err = s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) ORDER BY c.published`, id)
+	} else {
+		list, _ := json.Marshal(langs)
+		chapters, err = s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) AND c.lang IN (SELECT value FROM json_each(?)) ORDER BY c.published`, id, string(list))
+	}
 	if err != nil {
 		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
@@ -945,7 +1005,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.loginPage)
 	mux.HandleFunc("POST /logout", s.web(false, s.logout))
-	mux.HandleFunc("GET /{$}", s.web(false, s.libraryPage))
+	mux.HandleFunc("GET /{$}", s.web(false, s.live(s.libraryPage, nil)))
 	mux.HandleFunc("GET /search", s.web(false, s.searchPage))
 	mux.HandleFunc("POST /follow", s.web(false, s.followAction))
 	mux.HandleFunc("POST /unfollow", s.web(false, s.unfollowAction))

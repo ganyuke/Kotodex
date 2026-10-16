@@ -57,7 +57,7 @@
       {{if .Error}}<dt>Problem</dt><dd class="bad">{{.Error}}</dd>{{end}}
     </dl>
     <p class="muted">Kotodex imports your MangaDex follows at every check. Unfollowing on MangaDex unfollows here too. Kotodex never changes your follows on MangaDex.</p>
-    <form method="post" action="/settings/mangadex/unlink" class="row" data-confirm="Unlink your MangaDex account?">
+    <form method="post" action="/settings/mangadex/unlink" class="row" hx-confirm="Unlink your MangaDex account?">
       <label class="check"><input type="checkbox" name="keep" value="1" checked> Keep following the imported manga</label>
       <button class="secondary">Unlink</button>
     </form>
@@ -112,7 +112,7 @@
         <td>{{.Name}}</td>
         <td>{{if .Admin}}Admin{{else}}User{{end}}</td>
         <td><form method="post" action="/settings/users/{{.ID}}/password" class="inline"><input type="password" name="password" autocomplete="new-password" required aria-label="New password for {{.Name}}"><button class="small secondary">Set</button></form></td>
-        <td class="actions">{{if ne .ID $me.ID}}<form method="post" action="/settings/users/{{.ID}}/delete" data-confirm="Delete {{.Name}}?"><button class="small link danger">Delete</button></form>{{end}}</td>
+        <td class="actions">{{if ne .ID $me.ID}}<form method="post" action="/settings/users/{{.ID}}/delete" hx-confirm="Delete {{.Name}}?"><button class="small link danger">Delete</button></form>{{end}}</td>
       </tr>
       {{end}}
       </tbody>

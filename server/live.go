@@ -4,16 +4,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html/template"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Live updates. A page with a [data-live] section opens an EventSource on its
-// own URL. The same handler then runs again whenever something changes, and
-// only the "live" template is rendered and sent as an event. Nothing is sent
-// when the section looks the same as last time.
+// Live updates. A page's live sections are templates named "live-*", shown in
+// an element with the template's name as its id. The page opens an htmx SSE
+// connection on its own URL (hx-sse:connect in layout.html). The same handler then runs again whenever
+// something changes, only the live templates are rendered, and the sections
+// that look different from last time are sent as one message of htmx
+// out-of-band swaps. Nothing is sent when no section changed.
 
 // changes wakes everyone waiting when something on the live pages changes.
 // The zero value is ready to use.
@@ -54,14 +59,37 @@ const (
 
 type liveKey struct{}
 
-// liveFragment reports whether render should only write the "live" template.
-func liveFragment(r *http.Request) bool {
-	return r.Context().Value(liveKey{}) != nil
+// liveSections holds one render of a page's live sections, by template name.
+type liveSections map[string][]byte
+
+// liveCollector returns where render should put the live sections instead of
+// writing the page, or nil for a normal render.
+func liveCollector(r *http.Request) liveSections {
+	sections, _ := r.Context().Value(liveKey{}).(liveSections)
+	return sections
 }
 
-// wantsStream reports whether the browser asks for a live update stream.
+// liveNames lists the live sections a page template defines.
+func liveNames(t *template.Template) []string {
+	var names []string
+	for _, tt := range t.Templates() {
+		if strings.HasPrefix(tt.Name(), "live-") {
+			names = append(names, tt.Name())
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// liveHeader marks the request for a live update stream, sent by the
+// hx-sse:connect element in layout.html. The Accept header can't tell it
+// apart, since htmx's SSE extension adds text/event-stream to every request,
+// links and forms included.
+const liveHeader = "Kotodex-Live"
+
+// wantsStream reports whether the page asks for a live update stream.
 func wantsStream(r *http.Request) bool {
-	return r.Header.Get("Accept") == "text/event-stream"
+	return r.Header.Get(liveHeader) != ""
 }
 
 // startStream sends the headers of an event stream. EventSource treats any
@@ -103,7 +131,7 @@ func (s *Server) live(h http.HandlerFunc, showsProgress func(r *http.Request) bo
 		token := sessionToken(r)
 		u := currentUser(r) // web() just checked the session
 		checkUser := false
-		var last []byte
+		last := liveSections{}
 		for {
 			changed := s.dl.changed.wait()
 			signedOut := s.db.signedOut.wait()
@@ -119,18 +147,27 @@ func (s *Server) live(h http.HandlerFunc, showsProgress func(r *http.Request) bo
 					return
 				}
 			}
-			fr := r.WithContext(context.WithValue(context.WithValue(ctx, liveKey{}, true), userKey, u))
-			var frag fragmentWriter
-			h(&frag, fr)
+			sections := liveSections{}
+			fr := r.WithContext(context.WithValue(context.WithValue(ctx, liveKey{}, sections), userKey, u))
+			var st statusWriter
+			h(&st, fr)
 			// The page is gone (a deleted manga). The reload shows that.
-			if frag.status != 0 && frag.status != http.StatusOK {
+			if st.status != 0 && st.status != http.StatusOK {
 				endStream(w, rc)
 				return
 			}
-			out := frag.buf.Bytes()
-			if !bytes.Equal(out, last) {
-				last = bytes.Clone(out)
-				writeEvent(w, out)
+			var msg bytes.Buffer
+			for _, name := range slices.Sorted(maps.Keys(sections)) {
+				if bytes.Equal(sections[name], last[name]) {
+					continue
+				}
+				last[name] = sections[name]
+				fmt.Fprintf(&msg, `<div id="%s" hx-swap-oob="innerMorph">`, name)
+				msg.Write(sections[name])
+				msg.WriteString("</div>\n")
+			}
+			if msg.Len() > 0 {
+				writeEvent(w, msg.Bytes())
 			} else {
 				fmt.Fprint(w, ": ping\n\n")
 			}
@@ -182,29 +219,30 @@ func writeEvent(w http.ResponseWriter, html []byte) {
 	w.Write([]byte(b.String()))
 }
 
-// fragmentWriter collects one render of a live section.
-type fragmentWriter struct {
+// statusWriter records the status of a live render. The sections go into
+// the liveSections in the request instead. Anything else written, like an
+// error page, is dropped.
+type statusWriter struct {
 	header http.Header
 	status int
-	buf    bytes.Buffer
 }
 
-func (f *fragmentWriter) Header() http.Header {
+func (f *statusWriter) Header() http.Header {
 	if f.header == nil {
 		f.header = http.Header{}
 	}
 	return f.header
 }
 
-func (f *fragmentWriter) WriteHeader(code int) {
+func (f *statusWriter) WriteHeader(code int) {
 	if f.status == 0 {
 		f.status = code
 	}
 }
 
-func (f *fragmentWriter) Write(p []byte) (int, error) {
+func (f *statusWriter) Write(p []byte) (int, error) {
 	if f.status == 0 {
 		f.status = http.StatusOK
 	}
-	return f.buf.Write(p)
+	return len(p), nil
 }
