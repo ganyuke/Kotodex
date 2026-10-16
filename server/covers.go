@@ -33,6 +33,7 @@ const (
 	coverTimeout  = 20 * time.Second
 	coverRetry    = 24 * time.Hour // after a failed download
 	coverWorkers  = 2
+	coverMaxFails = 10000 // failed addresses remembered at once
 )
 
 var coverTypes = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
@@ -110,12 +111,16 @@ type Covers struct {
 	mu     sync.Mutex
 	busy   map[string]bool
 	failed map[string]time.Time
+	size   int64 // bytes stored, counted on first use
+	sized  sync.Once
+	limit  func() int64 // bytes all stored covers may take, 0 for no limit
 }
 
-func newCovers(mangaDir string) *Covers {
+func newCovers(db *DB, mangaDir string) *Covers {
 	return &Covers{
 		dir: filepath.Join(mangaDir, "other"), client: coverClient(), queue: make(chan string, 256),
 		busy: map[string]bool{}, failed: map[string]time.Time{},
+		limit: func() int64 { return int64(db.settings().CoverLimitMB) << 20 },
 	}
 }
 
@@ -148,6 +153,16 @@ func (c *Covers) want(u string) {
 	if c.busy[u] || time.Since(c.failed[u]) < coverRetry {
 		return
 	}
+	if len(c.failed) >= coverMaxFails {
+		for k, t := range c.failed {
+			if time.Since(t) >= coverRetry {
+				delete(c.failed, k)
+			}
+		}
+		if len(c.failed) >= coverMaxFails {
+			clear(c.failed)
+		}
+	}
 	select {
 	case c.queue <- u:
 		c.busy[u] = true
@@ -178,6 +193,28 @@ func (c *Covers) Run(ctx context.Context) {
 	wg.Wait()
 }
 
+// reserve counts n more bytes against the admin's storage limit, or
+// reports that they don't fit. Covers already stored are never deleted, so a
+// full limit only stops new downloads.
+func (c *Covers) reserve(n int64) bool {
+	c.sized.Do(func() {
+		entries, _ := os.ReadDir(c.dir)
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil {
+				c.size += info.Size()
+			}
+		}
+	})
+	limit := c.limit()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit > 0 && c.size+n > limit {
+		return false
+	}
+	c.size += n
+	return true
+}
+
 func (c *Covers) fetch(ctx context.Context, u string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
@@ -203,6 +240,9 @@ func (c *Covers) fetch(ctx context.Context, u string) error {
 	ext, ok := coverTypes[http.DetectContentType(data)]
 	if !ok {
 		return errors.New("not an image")
+	}
+	if !c.reserve(int64(len(data))) {
+		return errors.New("cover storage is full")
 	}
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return err

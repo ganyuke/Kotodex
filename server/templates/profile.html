@@ -28,7 +28,10 @@
   <div class="row section-head">
     <h2>Reading<span class="count">{{$d.ReadingCount}}</span></h2>
     {{if $d.Reading}}<span class="muted">Last read first</span>{{end}}
-    {{if gt $d.ReadingCount (len $d.Reading)}}<a class="push" href="{{$d.Path}}/reading">Show all {{$d.ReadingCount}}</a>{{else if $d.ReadingCount}}<a class="push" href="{{$d.Path}}/reading?tab=finished">Finished</a>{{end}}
+    <span class="push buttons">
+      {{if gt $d.ReadingCount (len $d.Reading)}}<a href="{{$d.Path}}/reading">Show all {{$d.ReadingCount}}</a>{{end}}
+      {{if $d.FinishedCount}}<a href="{{$d.Path}}/reading?tab=finished">Finished {{$d.FinishedCount}}</a>{{end}}
+    </span>
   </div>
   {{if $d.Reading}}{{template "places" $d.Reading}}{{else}}<p class="empty small">Nothing in progress.</p>{{end}}
 
@@ -57,7 +60,7 @@
     <h2>Reading log</h2>
     {{if $d.LogMore}}<a class="push" href="{{$d.Path}}/log">Show all</a>{{end}}
   </div>
-  {{if $d.Log}}{{template "log" $d.Log}}{{else}}<p class="empty small">No reading yet.</p>{{end}}
+  {{if $d.Log}}{{template "log" $d.Log}}{{else if $d.LogMore}}<p class="empty small">No reading in the past year.</p>{{else}}<p class="empty small">No reading yet.</p>{{end}}
 </div>
 <aside>
   <div class="row section-head">

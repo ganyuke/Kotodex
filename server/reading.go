@@ -395,6 +395,17 @@ func (db *DB) readSessions(viewer, owner int64, since int64, mangaDex string) ([
 	return out, nil
 }
 
+// readBefore reports whether owner has reading the viewer may see from
+// before before (milliseconds).
+func (db *DB) readBefore(viewer, owner, before int64) bool {
+	var ok bool
+	db.QueryRow(`SELECT EXISTS(SELECT 1 FROM reading_events e JOIN users us ON us.id=e.user_id
+		JOIN sync_manga sm ON sm.user_id=e.user_id AND sm.id=e.manga_id
+		WHERE e.user_id=@owner AND e.at<@before AND `+shareFilter("e.user_id", "sm.source")+`)`,
+		shareArgs(viewer, sql.Named("owner", owner), sql.Named("before", before))...).Scan(&ok)
+	return ok
+}
+
 func (s *Server) fillSessions(u *User, ci *chapterIndex, list []*ReadSession) {
 	for _, r := range list {
 		s.fill(u, ci, &r.SyncedManga)
@@ -787,9 +798,14 @@ type Heatmap struct {
 // heatmap lays out reading time per day for the past year, a week per
 // column, as an SVG the page draws with classes.
 func heatmap(list []*ReadSession, now time.Time) Heatmap {
+	// A session with one save (read offline, or quickly between syncs) has
+	// no length, but the day still had reading.
 	perDay := map[string]time.Duration{}
+	readOn := map[string]bool{}
 	for _, r := range list {
-		perDay[time.UnixMilli(r.Start).Format("2006-01-02")] += r.Duration()
+		day := time.UnixMilli(r.Start).Format("2006-01-02")
+		perDay[day] += r.Duration()
+		readOn[day] = true
 	}
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	start := today.AddDate(0, 0, -int(today.Weekday())-52*7)
@@ -809,11 +825,12 @@ func heatmap(list []*ReadSession, now time.Time) Heatmap {
 			if day.After(today) {
 				hd.Hidden = true
 			} else {
-				t := perDay[day.Format("2006-01-02")]
+				key := day.Format("2006-01-02")
+				t := perDay[key]
 				total += t
 				hd.Minutes = int(t.Minutes())
 				switch {
-				case t == 0:
+				case !readOn[key]:
 					hd.Tip = day.Format("Jan 2") + ": no reading"
 				case t < 20*time.Minute:
 					hd.Level = 1
@@ -824,9 +841,13 @@ func heatmap(list []*ReadSession, now time.Time) Heatmap {
 				default:
 					hd.Level = 4
 				}
-				if t > 0 {
+				if readOn[key] {
 					h.DaysOn++
+					hd.Level = max(hd.Level, 1)
 					hd.Tip = day.Format("Jan 2") + ": " + minutes(t)
+					if t == 0 {
+						hd.Tip = day.Format("Jan 2") + ": read"
+					}
 				}
 			}
 			h.Days = append(h.Days, hd)
@@ -866,6 +887,31 @@ func (db *DB) mangaLists(viewer int64, mangaDex string) ([]mangaListRow, error) 
 	return out, rows.Err()
 }
 
+// readingTimes adds up each person's reading time on a Kotodex manga, the
+// same way sessions do: gaps between saves count unless they're long enough
+// to start a new session. One query, since the manga page asks for it on
+// every live update.
+func (db *DB) readingTimes(viewer int64, mangaDex string) map[int64]time.Duration {
+	out := map[int64]time.Duration{}
+	rows, err := db.Query(`SELECT user_id, sum(CASE WHEN gap<=@limit THEN gap ELSE 0 END) FROM (
+			SELECT e.user_id, e.at - lag(e.at) OVER (PARTITION BY e.user_id, e.manga_id ORDER BY e.at) AS gap
+			FROM reading_events e JOIN users us ON us.id=e.user_id
+			JOIN sync_manga sm ON sm.user_id=e.user_id AND sm.id=e.manga_id
+			WHERE sm.source=@kotodex AND sm.url=@mdx AND `+shareFilter("e.user_id", "sm.source")+`
+		) GROUP BY user_id`, shareArgs(viewer, sql.Named("mdx", mangaDex), sql.Named("limit", sessionGap.Milliseconds()))...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, ms int64
+		if rows.Scan(&id, &ms) == nil {
+			out[id] = time.Duration(ms) * time.Millisecond
+		}
+	}
+	return out
+}
+
 // Reader is a row of the Readers table on a manga page.
 type Reader struct {
 	*Place
@@ -893,11 +939,7 @@ func (s *Server) mangaReading(u *User, m *Manga, all []*Chapter) MangaReading {
 	ci := newChapterIndex(s.db)
 	places, _, _ := s.db.progress(PlaceQuery{Viewer: u.ID, MangaDex: m.ID, Sort: "progress"})
 	s.fillProgress(u, ci, places)
-	sessions, _ := s.db.readSessions(u.ID, 0, 0, m.ID)
-	times := map[int64]time.Duration{}
-	for _, r := range sessions {
-		times[r.UserID] += r.Duration()
-	}
+	times := s.db.readingTimes(u.ID, m.ID)
 	lists, _ := s.db.mangaLists(u.ID, m.ID)
 	byUser := map[int64][]string{}
 	counts := map[string]int{}

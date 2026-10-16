@@ -246,6 +246,7 @@ func (s *Server) loadTemplates() {
 		"clock":   func(ms int64) string { return time.UnixMilli(ms).Format("3:04 PM") },
 		"minutes": minutes,
 		"plural":  plural,
+		"flag":    langFlag,
 		"people":  func(name string) string { return "/people/" + url.PathEscape(name) },
 	}
 	s.pages = map[string]*template.Template{}
@@ -340,7 +341,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p p
 		return
 	}
 	if len(liveNames(t)) > 0 {
-		p.LiveURL = r.URL.RequestURI()
+		// The stream gets an address of its own. Firefox holds back a second
+		// request for the exact address of a stream that's still open, so
+		// clicking a link to the page you're on would wait until you left,
+		// then land you back here.
+		live := *r.URL
+		q := live.Query()
+		q.Set("live", "1")
+		live.RawQuery = q.Encode()
+		p.LiveURL = live.RequestURI()
 	}
 	if err := t.Execute(w, p); err != nil {
 		log.Printf("render %s: %v", name, err)
@@ -660,8 +669,10 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		current = st.Current
 	}
 	reading := s.mangaReading(u, m, all)
+	allCols, cols := chapterColumns(r)
 	s.render(w, r, "manga", pageData{Title: m.Title, Nav: "library", Data: map[string]any{
 		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current, "Reading": reading,
+		"AllColumns": allCols, "Columns": cols,
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": r.URL.RawQuery,
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
@@ -878,6 +889,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, errMsg s
 		data["Interval"] = int(st.Interval.Minutes())
 		data["DataSaver"] = st.DataSaver
 		data["OtherCovers"] = st.OtherCovers
+		data["CoverLimit"] = st.CoverLimitMB
 		ratings := map[string]bool{}
 		for _, r := range st.ContentRatings {
 			ratings[r] = true
@@ -959,9 +971,15 @@ func (s *Server) settingsServer(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("other_covers") == "1" {
 		otherCovers = "1"
 	}
+	coverLimit, err := strconv.Atoi(strings.TrimSpace(r.FormValue("cover_limit")))
+	if err != nil || coverLimit < 0 {
+		s.renderSettings(w, r, "Enter the space for covers in MB, or 0 for no limit.")
+		return
+	}
 	s.db.setSetting("interval", strconv.Itoa(interval))
 	s.db.setSetting("data_saver", dataSaver)
 	s.db.setSetting("other_covers", otherCovers)
+	s.db.setSetting("cover_limit", strconv.Itoa(coverLimit))
 	s.db.setSetting("content_ratings", strings.Join(ratings, ","))
 	s.dl.Reschedule()
 	back(w, r, "/settings", "Saved.")

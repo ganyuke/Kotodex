@@ -5,12 +5,7 @@
   <div class="info">
     <h1>{{$m.Title}}</h1>
     {{if $m.Authors}}<p class="muted">{{join $m.Authors ", "}}{{if $m.Year}} · {{$m.Year}}{{end}}</p>{{end}}
-    {{with $d.Reading.Mine}}
-    <div class="my-progress">
-      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">· {{.Percent100}}% of {{plural .Chapters "chapter"}}</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
-      <progress class="meter" max="100" value="{{.Percent100}}" aria-label="Your progress"></progress>
-    </div>
-    {{end}}
+    <div id="live-progress">{{template "live-progress" .}}</div>
     <dl class="facts" id="live-facts">{{template "live-facts" .}}</dl>
     <div class="buttons">
       {{if $m.Following}}
@@ -27,7 +22,7 @@
     {{if $m.Following}}
     <form method="post" action="/manga/{{$m.ID}}/languages" class="langpick">
       <span class="muted">Download new chapters in{{if not $d.LangsCustom}} (your defaults){{end}}</span>
-      {{range $d.LangChoices}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.FollowLangs .Code}} checked{{end}}> {{lang .Code}}</label>{{end}}
+      {{range $d.LangChoices}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.FollowLangs .Code}} checked{{end}}> {{with flag .Code}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang .Code}}</label>{{end}}
       <span class="buttons">
         <button class="small secondary">Save</button>
         {{if $d.LangsCustom}}<button class="small secondary icon-button" formaction="/manga/{{$m.ID}}/languages/reset" title="Use your default languages" aria-label="Use your default languages">{{template "reseticon"}}</button>{{end}}
@@ -39,28 +34,27 @@
   </div>
 </div>
 
-{{with $d.Reading.Readers}}
-<h2>Readers</h2>
-<table class="list readers">
-  <thead><tr><th>Person</th><th>Lists</th><th class="c-progress">Progress</th><th>Chapter</th><th class="num">Reading time</th><th>Last read</th></tr></thead>
-  <tbody>
-  {{range .}}
-  <tr{{if .Me}} class="mine"{{end}}>
-    <td><a href="{{people .UserName}}">{{.UserName}}</a>{{if .Me}} <span class="muted">(you)</span>{{end}}</td>
-    <td>{{range .Lists}}<span class="pill">{{.}}</span> {{end}}</td>
-    <td><progress class="meter" max="100" value="{{.Percent100}}" aria-label="Progress"></progress></td>
-    <td>{{.Where}}</td>
-    <td class="num">{{if .Time}}{{minutes .Time}}{{end}}</td>
-    <td class="nowrap">{{agoMs .Updated}}</td>
-  </tr>
-  {{end}}
-  </tbody>
-</table>
-{{end}}
+<div id="live-readers">{{template "live-readers" .}}</div>
 
 <div class="head chapters-head">
   <h2>Chapters</h2>
   <div class="filters">
+    <details class="colmenu">
+      <summary class="button secondary">Columns</summary>
+      <div class="colmenu-list">
+        {{$n := len $d.AllColumns}}
+        {{range $i, $c := $d.AllColumns}}
+        <div class="colmenu-row" data-col-row="{{.Name}}">
+          <label class="check"><input type="checkbox" data-col-toggle{{if not .Hidden}} checked{{end}}> {{.Label}}</label>
+          <span class="buttons">
+            <button type="button" class="small secondary icon-button" data-col-move="-1" aria-label="Move {{.Label}} left"{{if eq $i 0}} disabled{{end}}>&larr;</button>
+            <button type="button" class="small secondary icon-button" data-col-move="1" aria-label="Move {{.Label}} right"{{if eq (add $i 1) $n}} disabled{{end}}>&rarr;</button>
+          </span>
+        </div>
+        {{end}}
+        <button type="button" class="small link" data-col-reset>Reset columns</button>
+      </div>
+    </details>
     <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger='submit, change from:"find select"' hx-target="body" hx-push-url="true">
       <select id="live-langs" name="lang" aria-label="Language">{{template "live-langs" .}}</select>
       <noscript><button class="small secondary">Show</button></noscript>
@@ -90,32 +84,34 @@
 {{$d := .Data}}{{$m := $d.Manga}}
 {{if gt (len $d.Mine) 1}}<option value=""{{if eq $d.Filter ""}} selected{{end}}>Your languages ({{$d.MineCount.Downloaded}} of {{$d.MineCount.Chapters}} downloaded)</option>{{end}}
 <option value="all"{{if eq $d.Filter "all"}} selected{{end}}>All languages ({{$m.Downloaded}} of {{$m.Known}} downloaded)</option>
-{{range $d.LangOptions}}<option value="{{.Code}}"{{if eq .Code $d.Filter}} selected{{end}}>{{lang .Code}} ({{.Downloaded}} of {{.Chapters}} downloaded)</option>{{end}}
+{{range $d.LangOptions}}<option value="{{.Code}}"{{if eq .Code $d.Filter}} selected{{end}}>{{with flag .Code}}{{.}} {{end}}{{lang .Code}} ({{.Downloaded}} of {{.Chapters}} downloaded)</option>{{end}}
 {{end}}
 
 {{define "live-chapters"}}
 {{$d := .Data}}{{$m := $d.Manga}}{{$admin := .User.Admin}}
 {{if $d.Chapters}}
 <table class="list compact fixed chapters">
-  <colgroup><col class="c-chapter"><col><col class="c-lang"><col class="c-group"><col class="c-date"><col class="c-pages"><col class="c-you"><col class="c-status"><col class="c-actions"></colgroup>
-  <thead><tr><th>Chapter</th><th>Title</th><th>Language</th><th>Group</th><th>Published</th><th class="num">Pages</th><th>You</th><th>Status</th><th></th></tr></thead>
+  <colgroup><col class="c-chapter">{{range $d.Columns}}<col class="c-{{.Name}}">{{end}}<col class="c-actions"></colgroup>
+  <thead><tr><th>Chapter</th>{{range $d.Columns}}<th data-col="{{.Name}}" draggable="true"{{if eq .Name "pages"}} class="num"{{end}}>{{.Label}}</th>{{end}}<th></th></tr></thead>
   <tbody>
-  {{range $d.Chapters}}
+  {{range $c := $d.Chapters}}
   <tr id="c-{{.ID}}" class="state{{.State}}">
-    <td>{{chapterLabel .}}</td>
-    <td title="{{.Title}}">{{.Title}}</td>
-    <td>{{lang .Lang}}</td>
-    <td title="{{.Group}}">{{.Group}}</td>
-    <td>{{date .Published}}</td>
-    <td class="num">{{.Pages}}</td>
-    <td>{{with index $d.Reading.Chapters .ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
-    <td>
-      {{if and $d.Current (eq $d.Current.ChapterID .ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
-      {{else if eq .State 2}}<span title="{{date .Downloaded}}">Downloaded</span>
-      {{else if eq .State 1}}<span class="pill">Queued</span>
-      {{else if eq .State 3}}<span class="pill bad" title="{{.Error}}">Failed</span>
+    <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
+    {{range $d.Columns}}
+    {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
+    {{else if eq .Name "lang"}}<td>{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
+    {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{$c.Group}}</td>
+    {{else if eq .Name "date"}}<td>{{date $c.Published}}</td>
+    {{else if eq .Name "pages"}}<td class="num">{{$c.Pages}}</td>
+    {{else if eq .Name "you"}}<td>{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
+    {{else if eq .Name "status"}}<td>
+      {{if and $d.Current (eq $d.Current.ChapterID $c.ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
+      {{else if eq $c.State 2}}<span title="{{date $c.Downloaded}}">Downloaded</span>
+      {{else if eq $c.State 1}}<span class="pill">Queued</span>
+      {{else if eq $c.State 3}}<span class="pill bad" title="{{$c.Error}}">Failed</span>
       {{else}}<span class="muted">Not downloaded</span>{{end}}
-    </td>
+    </td>{{end}}
+    {{end}}
     <td class="actions">
       {{if eq .State 2}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
       {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><button class="small link">Cancel</button></form>
@@ -128,5 +124,37 @@
 </table>
 {{else}}
 <p class="empty">{{if not $m.Checked}}{{if $m.Followers}}Fetching the chapter list.{{else}}Follow this manga to fetch its chapters.{{end}}{{else if not $d.Shown}}MangaDex has no chapters for this manga.{{else if eq (len $d.Shown) 1}}No chapters in {{lang (index $d.Shown 0)}}.{{else}}No chapters in your languages.{{end}}</p>
+{{end}}
+{{end}}
+
+{{define "live-progress"}}
+{{$d := .Data}}
+    {{with $d.Reading.Mine}}
+    <div class="my-progress">
+      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">· {{.Percent100}}% of {{plural .Chapters "chapter"}}</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
+      <progress class="meter" max="100" value="{{.Percent100}}" aria-label="Your progress"></progress>
+    </div>
+    {{end}}
+{{end}}
+
+{{define "live-readers"}}
+{{$d := .Data}}
+{{with $d.Reading.Readers}}
+<h2>Readers</h2>
+<table class="list readers">
+  <thead><tr><th>Person</th><th>Lists</th><th class="c-progress">Progress</th><th>Chapter</th><th class="num">Reading time</th><th>Last read</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr id="reader-{{.UserID}}"{{if .Me}} class="mine"{{end}}>
+    <td><a href="{{people .UserName}}">{{.UserName}}</a>{{if .Me}} <span class="muted">(you)</span>{{end}}</td>
+    <td>{{range .Lists}}<span class="pill">{{.}}</span> {{end}}</td>
+    <td><progress class="meter" max="100" value="{{.Percent100}}" aria-label="Progress"></progress></td>
+    <td>{{.Where}}</td>
+    <td class="num">{{if .Time}}{{minutes .Time}}{{end}}</td>
+    <td class="nowrap">{{agoMs .Updated}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
 {{end}}
 {{end}}

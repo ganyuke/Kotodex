@@ -129,7 +129,7 @@ table.list { width: 100%; border-collapse: collapse; background: var(--surface);
 table.fixed { table-layout: fixed; }
 .fixed td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fixed td.actions { overflow: visible; }
-.fixed .c-chapter { width: 110px; }
+.fixed .c-chapter { width: 150px; } /* fits "Vol. 14 Ch. 123.5" */
 .fixed .c-lang { width: 120px; }
 .fixed .c-group { width: 14%; }
 .fixed .c-date { width: 110px; }
@@ -255,3 +255,14 @@ fieldset.choices { flex-direction: column; flex-wrap: nowrap; gap: 6px; }
 .heatmap .h4 { fill: var(--heat4); }
 .heatmap figcaption { font-size: 12px; margin-top: 4px; }
 .warning { display: inline-flex; color: var(--bad); cursor: help; }
+
+/* Chapter table columns */
+.colmenu { position: relative; }
+.colmenu > summary { list-style: none; }
+.colmenu > summary::-webkit-details-marker { display: none; }
+.colmenu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 2; min-width: 260px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); }
+.colmenu-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.colmenu-list > .link { align-self: flex-start; margin-top: 4px; }
+th[draggable="true"] { cursor: grab; }
+button:disabled { opacity: 0.4; cursor: default; filter: none; }

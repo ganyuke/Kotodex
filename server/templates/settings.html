@@ -27,6 +27,7 @@
       <li>In Kotatsu, open Settings, Services, Synchronization settings, and set the server address above.</li>
       <li>Open Synchronization and sign in with the email above and your Kotodex password.</li>
     </ol>
+    <p class="muted">Others on this server see {{if eq $d.Share "all"}}everything you read{{else if eq $d.Share "kotodex"}}what you read on Kotodex{{else}}only what you follow{{end}}. <a href="#reading">Change</a></p>
   </section>
 
   <section class="card">
@@ -105,7 +106,7 @@
     <form method="post" action="/settings/languages" class="stack wide">
       <p class="muted">Languages for the manga you follow. Change them for one manga on the manga's page.</p>
       <div class="langgrid">
-        {{range $d.AllLangs}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.MyLangs .Code}} checked{{end}}> {{.Name}}</label>{{end}}
+        {{range $d.AllLangs}}<label class="check"><input type="checkbox" name="lang" value="{{.Code}}"{{if index $d.MyLangs .Code}} checked{{end}}> {{with flag .Code}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{.Name}}</label>{{end}}
       </div>
       <button type="submit">Save</button>
     </form>
@@ -118,6 +119,7 @@
       <label>Check every (minutes)<input type="number" name="interval" min="10" value="{{$d.Interval}}" required></label>
       <label class="check"><input type="checkbox" name="data_saver" value="1"{{if $d.DataSaver}} checked{{end}}> Download smaller, compressed pages</label>
       <label class="check"><input type="checkbox" name="other_covers" value="1"{{if $d.OtherCovers}} checked{{end}}> <span>Load covers of manga from other sources</span> {{template "warning" "Kotodex downloads them from the sites people read on in Kotatsu, so those sites see this server's address. Off, they show as gray boxes."}}</label>
+      <label><span>Space for those covers, in MB (<abbr title="0 means no limit. Saved covers are never deleted. When the space is full, new covers aren't downloaded.">?</abbr>)</span><input type="number" name="cover_limit" min="0" value="{{$d.CoverLimit}}" required></label>
       <fieldset>
         <legend>Show in search</legend>
         <label class="check"><input type="checkbox" name="rating" value="safe"{{if index $d.Ratings "safe"}} checked{{end}}> Safe</label>

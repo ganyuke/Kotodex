@@ -105,7 +105,7 @@ func main() {
 		dl:       newDownloader(db, mdx, keys, mangaDir),
 		keys:     keys,
 		mangaDir: mangaDir,
-		covers:   newCovers(mangaDir),
+		covers:   newCovers(db, mangaDir),
 		limiter:  &loginLimiter{fails: map[string][]time.Time{}},
 		closing:  make(chan struct{}),
 	}

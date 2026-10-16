@@ -105,7 +105,8 @@ func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	ci := newChapterIndex(s.db)
-	year, _ := s.db.readSessions(u.ID, p.ID, now.AddDate(0, 0, -371).UnixMilli(), "")
+	yearAgo := now.AddDate(0, 0, -371).UnixMilli()
+	year, _ := s.db.readSessions(u.ID, p.ID, yearAgo, "")
 	weekAgo := now.AddDate(0, 0, -7).UnixMilli()
 	var week []*ReadSession
 	for _, rs := range year {
@@ -117,11 +118,13 @@ func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
 	data["Heatmap"] = heatmap(year, now)
 	log := year[:min(profileLog, len(year))]
 	s.fillSessions(u, ci, log)
-	data["Log"], data["LogMore"] = log, len(year) > profileLog
+	data["Log"], data["LogMore"] = log, len(year) > profileLog || s.db.readBefore(u.ID, p.ID, yearAgo)
 	unfinished := false
 	reading, readingCount, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &unfinished, Limit: profileReading})
 	s.fillProgress(u, ci, reading)
-	data["Reading"], data["ReadingCount"] = reading, readingCount
+	finished := true
+	_, finishedCount, _ := s.db.progress(PlaceQuery{Viewer: u.ID, Owner: p.ID, Finished: &finished, CountOnly: true})
+	data["Reading"], data["ReadingCount"], data["FinishedCount"] = reading, readingCount, finishedCount
 	lists, _ := s.db.lists(u.ID, p.ID)
 	for _, l := range lists {
 		l.Entries, _, _ = s.db.listEntries(ListQuery{Viewer: u.ID, Owner: p.ID, List: l.ID, Order: l.Order, Limit: profileShelf})
@@ -269,8 +272,12 @@ func (s *Server) activityPage(w http.ResponseWriter, r *http.Request) {
 	n := 0
 	for i := range days {
 		if n+len(days[i].Items) > feedItems {
-			days[i].Items = days[i].Items[:feedItems-n]
-			days = days[:i+1]
+			if n == feedItems {
+				days = days[:i]
+			} else {
+				days[i].Items = days[i].Items[:feedItems-n]
+				days = days[:i+1]
+			}
 			break
 		}
 		n += len(days[i].Items)

@@ -42,8 +42,8 @@
   {{range $d.Queue}}
   <tr id="q-{{.ID}}">
     <td title="{{.MangaTitle}}"><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
-    <td>{{chapterLabel .}}</td>
-    <td>{{lang .Lang}}</td>
+    <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
+    <td>{{with flag .Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang .Lang}}</td>
     <td title="{{.Group}}">{{.Group}}</td>
     <td>{{date .Published}}</td>
     <td{{if .Error}} title="{{.Error}}"{{end}}>
@@ -90,9 +90,9 @@
   <tr id="h-{{.ID}}">
     <td title="{{date .Downloaded}}">{{ago .Downloaded}}</td>
     <td title="{{.MangaTitle}}"><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
-    <td>{{chapterLabel .}}</td>
+    <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
     <td title="{{.Title}}">{{.Title}}</td>
-    <td>{{lang .Lang}}</td>
+    <td>{{with flag .Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang .Lang}}</td>
     <td title="{{.Group}}">{{.Group}}</td>
     <td class="num">{{.Pages}}</td>
     <td class="num">{{size .Size}}</td>

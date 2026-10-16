@@ -269,6 +269,13 @@ func (db *DB) saveHistory(userID int64, rows []syncHistory) error {
 			return fmt.Errorf("save history: %w", err)
 		}
 	}
+	// Removing a manga from history in the app also removes its reading from
+	// Kotodex, up to when it was removed. Reading it again later starts fresh.
+	_, err := db.Exec(`DELETE FROM reading_events WHERE user_id=?1 AND EXISTS(SELECT 1 FROM sync_history h
+		WHERE h.user_id=?1 AND h.manga_id=reading_events.manga_id AND h.deleted_at>0 AND reading_events.at<=h.deleted_at)`, userID)
+	if err != nil {
+		return fmt.Errorf("remove reading: %w", err)
+	}
 	return nil
 }
 
@@ -297,6 +304,16 @@ func (db *DB) syncedHistory(userID int64) ([]syncHistory, error) {
 // upload wins for favorites and categories. Manga showing up in a category,
 // or being removed from one, are logged for the activity feed.
 func (db *DB) saveFavourites(userID int64, cats []syncCategory, favs []syncFavourite) error {
+	// Check every manga before writing anything, so a refused upload
+	// changes nothing.
+	var manga []mangaUpload
+	for _, f := range favs {
+		info, data, err := mangaRow(f.MangaID, f.Manga)
+		if err != nil {
+			return shownError(fmt.Sprintf("Favorite %d: %v", f.MangaID, err))
+		}
+		manga = append(manga, mangaUpload{f.MangaID, info, data})
+	}
 	for chunk := range slices.Chunk(cats, syncChunk) {
 		args := make([]any, 0, len(chunk)*9)
 		for _, c := range chunk {
@@ -309,14 +326,6 @@ func (db *DB) saveFavourites(userID int64, cats []syncCategory, favs []syncFavou
 		if err != nil {
 			return fmt.Errorf("save categories: %w", err)
 		}
-	}
-	var manga []mangaUpload
-	for _, f := range favs {
-		info, data, err := mangaRow(f.MangaID, f.Manga)
-		if err != nil {
-			return shownError(fmt.Sprintf("Favorite %d: %v", f.MangaID, err))
-		}
-		manga = append(manga, mangaUpload{f.MangaID, info, data})
 	}
 	if err := db.saveSyncManga(userID, manga); err != nil {
 		return err

@@ -41,7 +41,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	}
 	s := &Server{
 		db: db, mdx: mdx, dl: newDownloader(db, mdx, keys, mangaDir), keys: keys,
-		mangaDir: mangaDir, limiter: &loginLimiter{fails: map[string][]time.Time{}}, covers: newCovers(mangaDir),
+		mangaDir: mangaDir, limiter: &loginLimiter{fails: map[string][]time.Time{}}, covers: newCovers(db, mangaDir),
 	}
 	s.loadTemplates()
 	ts := httptest.NewServer(s.routes())
@@ -1109,7 +1109,7 @@ func TestLivePageStillPlain(t *testing.T) {
 	}
 	b, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), `<div id="live-chapters">`) || !strings.Contains(string(b), `hx-sse:connect="/manga/`+mangaA+`"`) {
+	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), `<div id="live-chapters">`) || !strings.Contains(string(b), `hx-sse:connect="/manga/`+mangaA+`?live=1"`) {
 		t.Fatal("manga page should be a full page with its live section")
 	}
 }
@@ -1503,10 +1503,11 @@ func TestSyncHistory(t *testing.T) {
 	if chapter != 12 || events() != 3 {
 		t.Errorf("newer progress: chapter %d, %d events", chapter, events())
 	}
-	// Removing it on the phone sticks, even with the same save time.
+	// Removing it on the phone sticks, even with the same save time, and
+	// takes its reading out of the log.
 	syncPost(t, ts, token, "/resource/history", `{"history":[`+historyRow(-5, 12, 3000, 4000, 1)+`],"timestamp":1}`)
 	s.db.QueryRow(`SELECT deleted_at FROM sync_history WHERE user_id=? AND manga_id=-5`, uid).Scan(&deleted)
-	if deleted != 4000 || events() != 3 {
+	if deleted != 4000 || events() != 1 {
 		t.Errorf("removal: deleted_at %d, %d events", deleted, events())
 	}
 
@@ -1518,7 +1519,7 @@ func TestSyncHistory(t *testing.T) {
 	if code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+strings.Join(rows, ",")+`],"timestamp":1}`); code != http.StatusOK {
 		t.Fatalf("big upload: %d %s", code, b)
 	}
-	if events() != 453 {
+	if events() != 451 {
 		t.Errorf("events after big upload = %d", events())
 	}
 
@@ -1647,6 +1648,9 @@ func TestReadingSessions(t *testing.T) {
 	}
 	if d := list[0].Duration(); d != 15*time.Minute {
 		t.Errorf("duration = %v", d)
+	}
+	if d := s.db.readingTimes(uid, mangaA)[uid]; d != 15*time.Minute {
+		t.Errorf("reading time = %v, want the same as the session", d)
 	}
 	// A save more than half an hour later starts a new session.
 	s.db.Exec(`INSERT INTO reading_events(user_id,manga_id,chapter_id,page,percent,at) VALUES(?,?,?,?,?,?)`,
@@ -1818,5 +1822,52 @@ func TestOtherCovers(t *testing.T) {
 	// Something that isn't an image is never kept.
 	if err := s.covers.fetch(ctx, site.URL+"/page.html"); err == nil || s.covers.cached(site.URL+"/page.html") != "" {
 		t.Errorf("kept a page that isn't an image: %v", err)
+	}
+}
+
+func TestCoverLimit(t *testing.T) {
+	s, _ := testServer(t)
+	c := s.covers
+	if !c.reserve(10) {
+		t.Fatal("default limit refused 10 bytes")
+	}
+	s.db.setSetting("cover_limit", "1")
+	if c.reserve(2 << 20) {
+		t.Error("went over a 1 MB limit")
+	}
+	s.db.setSetting("cover_limit", "0")
+	if !c.reserve(4 << 30) {
+		t.Error("0 should mean no limit")
+	}
+	s.db.setSetting("cover_limit", "nonsense")
+	if s.db.settings().CoverLimitMB != 1024 {
+		t.Error("a bad stored value should fall back to the default")
+	}
+}
+
+func TestLangFlag(t *testing.T) {
+	for code, want := range map[string]string{"en": "🇬🇧", "es-la": "🇲🇽", "pt-br": "🇧🇷", "eo": "", "xx": ""} {
+		if got := langFlag(code); got != want {
+			t.Errorf("langFlag(%s) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestChapterColumns(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	all, shown := chapterColumns(r)
+	if len(all) != 7 || len(shown) != 7 || all[0].Name != "title" {
+		t.Fatalf("defaults: %v", all)
+	}
+	// Order and hidden ones from the cookie, made-up and repeated names
+	// skipped, and columns it doesn't mention added at the end.
+	r.AddCookie(&http.Cookie{Name: colsCookie, Value: "status.-group.lang.bogus.lang.title"})
+	all, shown = chapterColumns(r)
+	var names []string
+	for _, c := range shown {
+		names = append(names, c.Name)
+	}
+	if got := strings.Join(names, ","); got != "status,lang,title,date,pages,you" || len(all) != 7 {
+		t.Errorf("shown = %s, all = %d", got, len(all))
 	}
 }

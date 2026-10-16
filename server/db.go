@@ -178,6 +178,7 @@ type Settings struct {
 	DataSaver      bool
 	ContentRatings []string
 	OtherCovers    bool // load covers of synced manga from other sources
+	CoverLimitMB   int  // space those covers may take, 0 for no limit
 }
 
 var defaultSettings = map[string]string{
@@ -185,6 +186,7 @@ var defaultSettings = map[string]string{
 	"data_saver":      "0",
 	"content_ratings": "safe,suggestive,erotica",
 	"other_covers":    "0",
+	"cover_limit":     "1024",
 }
 
 func (db *DB) setting(key string) string {
@@ -201,6 +203,10 @@ func (db *DB) setSetting(key, value string) error {
 }
 
 func (db *DB) settings() Settings {
+	coverLimit, err := strconv.Atoi(db.setting("cover_limit"))
+	if err != nil || coverLimit < 0 {
+		coverLimit, _ = strconv.Atoi(defaultSettings["cover_limit"])
+	}
 	minutes, _ := strconv.Atoi(db.setting("interval"))
 	if minutes < 10 {
 		minutes = 10
@@ -210,6 +216,7 @@ func (db *DB) settings() Settings {
 		DataSaver:      db.setting("data_saver") == "1",
 		ContentRatings: splitList(db.setting("content_ratings")),
 		OtherCovers:    db.setting("other_covers") == "1",
+		CoverLimitMB:   coverLimit,
 	}
 }
 
