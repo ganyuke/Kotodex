@@ -21,11 +21,16 @@
     <dl class="facts">
       <dt>Server address</dt><dd><code data-origin>{{$d.Address}}</code></dd>
       <dt>Email (<abbr title="Any address that starts with your username and an @ works.">?</abbr>)</dt><dd><code data-sync-email="{{$me.Name}}">{{$me.Name}}@kotodex.home.arpa</code></dd>
+      <dt>Sync password</dt><dd>{{if $d.SyncPassword}}<code>{{$d.SyncPassword}}</code>{{else if $d.HasSyncPassword}}Made{{else}}Not made yet{{end}}</dd>
       <dt>Last sync</dt><dd>{{if $d.Synced}}{{ago $d.Synced}}{{else}}Not yet{{end}}</dd>
     </dl>
+    {{if $d.SyncPassword}}<p class="muted">Copy the sync password now. It's only shown once.</p>{{end}}
+    <form method="post" action="/settings/sync-password"{{if $d.HasSyncPassword}} hx-confirm="Make a new sync password? The old one stops working. Phones already signed in stay signed in."{{end}}>
+      <button class="secondary">{{if $d.HasSyncPassword}}New sync password{{else}}Make sync password{{end}}</button>
+    </form>
     <ol class="steps">
       <li>In Kotatsu, open Settings, Services, Synchronization settings, and set the server address above.</li>
-      <li>Open Synchronization and sign in with the email above and your Kotodex password.</li>
+      <li>Open Synchronization and sign in with the email and sync password above.</li>
     </ol>
     <p class="muted">Others on this server see {{if eq $d.Share "all"}}everything you read{{else if eq $d.Share "kotodex"}}what you read on Kotodex{{else}}only what you follow{{end}}. <a href="#reading">Change</a></p>
   </section>

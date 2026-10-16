@@ -140,10 +140,12 @@ func openDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("create sync schema: %w", err)
 	}
 	// Columns added with reading activity: who sees your reading, and when
-	// your app last synced.
+	// your app last synced. Then the sync password's hash, empty until the
+	// user makes one.
 	for _, col := range []struct{ name, def string }{
 		{"share", `TEXT NOT NULL DEFAULT 'kotodex'`},
 		{"synced", `INTEGER NOT NULL DEFAULT 0`},
+		{"sync_pass", `TEXT NOT NULL DEFAULT ''`},
 	} {
 		var has int
 		db.QueryRow(`SELECT count(*) FROM pragma_table_info('users') WHERE name=?`, col.name).Scan(&has)

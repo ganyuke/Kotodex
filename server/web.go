@@ -869,6 +869,12 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, errMsg string) {
+	s.renderSettingsWith(w, r, errMsg, "")
+}
+
+// renderSettingsWith shows the settings page, with a sync password that was
+// just made. It's only ever shown in the reply to making it.
+func (s *Server) renderSettingsWith(w http.ResponseWriter, r *http.Request, errMsg, syncPassword string) {
 	u := currentUser(r)
 	sessions, _ := s.db.sessions(u.ID, sessionToken(r))
 	var mdx struct {
@@ -892,6 +898,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, errMsg s
 	data := map[string]any{
 		"Sessions": sessions, "MangaDex": mdx, "Address": serverAddress(r), "Share": share, "Synced": synced,
 		"AllLangs": allLangs(), "MyLangs": myLangs,
+		"SyncPassword": syncPassword, "HasSyncPassword": s.db.hasSyncPassword(u.ID),
 	}
 	if u.Admin {
 		users, _ := s.db.users()
@@ -928,6 +935,16 @@ func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
 	token, _ := s.db.createSession(u.ID, "browser", r.UserAgent())
 	setSessionCookie(w, r, token)
 	back(w, r, "/settings", "Password changed. Other devices are signed out.")
+}
+
+func (s *Server) settingsSyncPassword(w http.ResponseWriter, r *http.Request) {
+	pw, err := s.db.newSyncPassword(currentUser(r).ID)
+	if err != nil {
+		s.renderSettings(w, r, userMessage(err))
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.renderSettingsWith(w, r, "", pw)
 }
 
 func (s *Server) settingsSignOut(w http.ResponseWriter, r *http.Request) {
@@ -1088,6 +1105,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /downloads/retry", s.web(false, s.downloadsRetry))
 	mux.HandleFunc("GET /settings", s.web(false, s.settingsPage))
 	mux.HandleFunc("POST /settings/password", s.web(false, s.settingsPassword))
+	mux.HandleFunc("POST /settings/sync-password", s.web(false, s.settingsSyncPassword))
 	mux.HandleFunc("POST /settings/sign-out", s.web(false, s.settingsSignOut))
 	mux.HandleFunc("POST /settings/mangadex", s.web(false, s.settingsMangaDex))
 	mux.HandleFunc("POST /settings/mangadex/unlink", s.web(false, s.settingsMangaDexUnlink))

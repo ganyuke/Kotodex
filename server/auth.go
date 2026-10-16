@@ -152,6 +152,40 @@ func (db *DB) checkPassword(name, password string) (*User, error) {
 	return db.userByID(id)
 }
 
+// Sync passwords
+//
+// Kotatsu's sync sign-in takes passwords of at most 24 characters and keeps
+// the password on the phone to sign in again when its token stops working.
+// So sync gets its own random password instead of the Kotodex one. It's 18
+// random bytes, 24 characters in base64, so a plain SHA-256 is enough to
+// store it.
+
+const syncPasswordBytes = 18
+
+// newSyncPassword makes a new sync password for the user and returns it.
+// The old one stops working. Phones already signed in stay signed in.
+func (db *DB) newSyncPassword(userID int64) (string, error) {
+	pw := randomToken(syncPasswordBytes)
+	_, err := db.Exec(`UPDATE users SET sync_pass=? WHERE id=?`, hashToken(pw), userID)
+	return pw, err
+}
+
+func (db *DB) hasSyncPassword(userID int64) bool {
+	var has bool
+	db.QueryRow(`SELECT sync_pass<>'' FROM users WHERE id=?`, userID).Scan(&has)
+	return has
+}
+
+func (db *DB) checkSyncPassword(name, password string) (*User, error) {
+	var id int64
+	var hash string
+	err := db.QueryRow(`SELECT id,sync_pass FROM users WHERE name=?`, strings.TrimSpace(name)).Scan(&id, &hash)
+	if err != nil || hash == "" || subtle.ConstantTimeCompare([]byte(hash), []byte(hashToken(password))) != 1 {
+		return nil, errors.New("wrong username or sync password")
+	}
+	return db.userByID(id)
+}
+
 func (db *DB) createSession(userID int64, kind, agent string) (string, error) {
 	token := randomToken(32)
 	_, err := db.Exec(`INSERT INTO sessions(hash,sid,user_id,kind,agent,created,used) VALUES(?,?,?,?,?,?,?)`,

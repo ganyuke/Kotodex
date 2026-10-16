@@ -434,9 +434,10 @@ func (s *Server) syncFailed(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, userMessage(err))
 }
 
-// syncAuth signs the app in. The app only takes an email address, so the
-// part before the last "@" is the Kotodex username and the rest is ignored.
-// A plain username works too, for apps that don't check.
+// syncAuth signs the app in with the user's sync password, never their
+// Kotodex password. The app only takes an email address, so the part before
+// the last "@" is the Kotodex username and the rest is ignored. A plain
+// username works too, for apps that don't check.
 func (s *Server) syncAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct{ Email, Password string }
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
@@ -452,10 +453,10 @@ func (s *Server) syncAuth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, "Too many attempts. Try again later.")
 		return
 	}
-	u, err := s.db.checkPassword(name, req.Password)
+	u, err := s.db.checkSyncPassword(name, req.Password)
 	if err != nil {
 		s.limiter.fail(keys)
-		writeJSON(w, http.StatusUnauthorized, "Wrong username or password")
+		writeJSON(w, http.StatusUnauthorized, "Wrong username or sync password")
 		return
 	}
 	token, err := s.db.createSession(u.ID, "sync", r.UserAgent())

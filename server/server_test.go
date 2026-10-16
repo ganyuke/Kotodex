@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,6 +58,8 @@ const (
 	chapter2 = "28ccd96c-23de-4ba8-a6dc-fed34697d2ab"
 )
 
+const testSyncPassword = "sync-pw"
+
 func seed(t *testing.T, s *Server) int64 {
 	t.Helper()
 	uid, err := s.db.createUser("mio", "pw", false)
@@ -66,6 +69,7 @@ func seed(t *testing.T, s *Server) int64 {
 	if err := s.db.upsertManga(&Manga{ID: mangaA, Title: "Akanabe", Tags: []string{"Comedy"}, Cover: "x.jpg"}); err != nil {
 		t.Fatal(err)
 	}
+	s.db.Exec(`UPDATE users SET sync_pass=? WHERE id=?`, hashToken(testSyncPassword), uid)
 	s.db.setFollow(uid, mangaA, true)
 	s.db.insertChapter(&Chapter{ID: chapter1, MangaID: mangaA, Number: "10", Lang: "en", Published: 100})
 	s.db.insertChapter(&Chapter{ID: chapter2, MangaID: mangaA, Number: "9.5", Lang: "en", Published: 200})
@@ -1383,7 +1387,7 @@ func syncPost(t *testing.T, ts *httptest.Server, token, path, body string) (int,
 
 func syncToken(t *testing.T, ts *httptest.Server) string {
 	t.Helper()
-	code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", "pw")
+	code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", testSyncPassword)
 	var out struct{ Token string }
 	json.Unmarshal([]byte(body), &out)
 	if code != http.StatusOK || out.Token == "" {
@@ -1396,13 +1400,17 @@ func TestSyncAuth(t *testing.T) {
 	s, ts := testServer(t)
 	uid := seed(t, s)
 	for _, email := range []string{"mio@kotodex.home.arpa", "Mio@manga.example.com", "mio"} {
-		if code, body := syncAuth(t, ts, email, "pw"); code != http.StatusOK || !strings.Contains(body, `"token"`) {
+		if code, body := syncAuth(t, ts, email, testSyncPassword); code != http.StatusOK || !strings.Contains(body, `"token"`) {
 			t.Errorf("%s: %d %s", email, code, body)
 		}
 	}
 	// The app shows the reply as the error, with the quotes removed.
-	if code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", "nope"); code != http.StatusUnauthorized || strings.TrimSpace(body) != `"Wrong username or password"` {
+	if code, body := syncAuth(t, ts, "mio@kotodex.home.arpa", "nope"); code != http.StatusUnauthorized || strings.TrimSpace(body) != `"Wrong username or sync password"` {
 		t.Errorf("wrong password: %d %s", code, body)
+	}
+	// The Kotodex password doesn't work for sync.
+	if code, _ := syncAuth(t, ts, "mio@kotodex.home.arpa", "pw"); code != http.StatusUnauthorized {
+		t.Errorf("Kotodex password: %d", code)
 	}
 	sessions, _ := s.db.sessions(uid, "")
 	n := 0
@@ -2038,5 +2046,79 @@ func TestPageQueryDropsLive(t *testing.T) {
 	r := httptest.NewRequest("GET", "/manga/x?lang=en&live=1", nil)
 	if q := pageQuery(r); q != "lang=en" {
 		t.Errorf("pageQuery = %q", q)
+	}
+}
+
+func TestSyncPassword(t *testing.T) {
+	s, ts := testServer(t)
+	uid, err := s.db.createUser("ritsu", "a-long-kotodex-password-over-24-characters", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No sync password yet: nothing signs in, not even an empty one.
+	for _, pw := range []string{"", "a-long-kotodex-password-over-24-characters"} {
+		if code, _ := syncAuth(t, ts, "ritsu@kotodex.home.arpa", pw); code != http.StatusUnauthorized {
+			t.Errorf("before making one, %q: %d", pw, code)
+		}
+	}
+	token, _ := s.db.createSession(uid, "browser", "test")
+	makeOne := func() (string, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", ts.URL+"/settings/sync-password", nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		m := regexp.MustCompile(`<dt>Sync password</dt><dd><code>([^<]+)</code>`).FindSubmatch(b)
+		if res.StatusCode != http.StatusOK || m == nil {
+			t.Fatalf("no sync password shown: %d", res.StatusCode)
+		}
+		return string(m[1]), res.Header.Get("Cache-Control")
+	}
+	first, cache := makeOne()
+	if len(first) > 24 {
+		t.Errorf("sync password is %d characters, Kotatsu takes 24", len(first))
+	}
+	if cache != "no-store" {
+		t.Errorf("Cache-Control = %q", cache)
+	}
+	code, body := syncAuth(t, ts, "ritsu@kotodex.home.arpa", first)
+	if code != http.StatusOK {
+		t.Fatalf("sign in: %d %s", code, body)
+	}
+	var out struct{ Token string }
+	json.Unmarshal([]byte(body), &out)
+
+	// It's shown once.
+	req, _ := http.NewRequest("GET", ts.URL+"/settings", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	res, _ := http.DefaultClient.Do(req)
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if strings.Contains(string(b), first) || !strings.Contains(string(b), "New sync password") {
+		t.Error("settings page should say one was made without showing it")
+	}
+
+	// A new one replaces the old one. The phone already signed in stays.
+	second, _ := makeOne()
+	if second == first {
+		t.Fatal("same password twice")
+	}
+	if code, _ := syncAuth(t, ts, "ritsu@kotodex.home.arpa", first); code != http.StatusUnauthorized {
+		t.Errorf("old sync password: %d", code)
+	}
+	if code, _ := syncAuth(t, ts, "ritsu@kotodex.home.arpa", second); code != http.StatusOK {
+		t.Errorf("new sync password: %d", code)
+	}
+	if code, _ := syncPost(t, ts, out.Token, "/resource/history", `{"timestamp":1}`); code == http.StatusUnauthorized {
+		t.Error("phone signed out by a new sync password")
+	}
+	// It doesn't sign in anywhere but sync.
+	res, _ = http.Post(ts.URL+"/api/v1/login", "application/json", strings.NewReader(fmt.Sprintf(`{"username":"ritsu","password":%q}`, second)))
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("plugin sign-in with sync password: %d", res.StatusCode)
 	}
 }

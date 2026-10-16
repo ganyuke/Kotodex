@@ -35,12 +35,13 @@ To read on your phone, install the plugin APK, open it, and sign in with the ser
 - With a linked MangaDex account, Kotodex follows whatever you follow on MangaDex. Following or unfollowing something in Kotodex overrides that for one manga, and the reset button next to Follow on the manga's page goes back to matching MangaDex. Kotodex never changes your follows on MangaDex.
 - MangaDex chapters from official publishers only link to the publisher's site. Kotodex can't download those and leaves them out.
 
-To track reading, point Kotatsu's sync at Kotodex. In Kotatsu, open Settings, Services, Synchronization settings and set the server address. Then open Synchronization and sign in with the email shown under Settings in Kotodex (or in the plugin app) and your Kotodex password. Your reading then shows up on your profile and under Activity.
+To track reading, point Kotatsu's sync at Kotodex. In Kotatsu, open Settings, Services, Synchronization settings and set the server address. Then press Make sync password under Settings in Kotodex, open Synchronization in Kotatsu, and sign in with the email and sync password shown there. Your reading then shows up on your profile and under Activity.
 
 - Kotodex becomes Kotatsu's sync server, so history and favorites sync between your phones through it. Kotatsu takes one sync server at a time.
 - Pick who sees your reading under Settings: everything, only manga on Kotodex, or nothing. What you follow shows either way.
 - Kotatsu only signs in with an email address. Kotodex reads the part before the @ as the username, so a username with spaces or symbols other than `._%+-` can't sign in to sync.
 - Reading done offline shows up as one entry once the phone syncs again.
+- Sync takes the sync password only, not your Kotodex password. Kotodex shows it once. To set up another phone, make a new one. Phones already signed in stay signed in.
 
 Set your usual languages under Settings. Every manga you follow uses those unless you pick languages for it on the manga's page. The reset button there goes back to your usual ones. When people follow the same manga in different languages, Kotodex downloads every language someone wants and keeps one copy of each chapter.
 
