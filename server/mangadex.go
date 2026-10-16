@@ -336,6 +336,10 @@ func (m *MangaDex) feed(ctx context.Context, mangaID string, langs []string, all
 		q.Set("offset", strconv.Itoa(offset))
 		q.Add("includes[]", "scanlation_group")
 		q.Set("order[readableAt]", "desc")
+		// Leave out official publisher chapters, which only link elsewhere, so
+		// they don't crowd real uploads out of the quick check's newest page.
+		q.Set("includeExternalUrl", "0")
+		q.Set("includeEmptyPages", "0")
 		for _, l := range langs {
 			q.Add("translatedLanguage[]", l)
 		}
