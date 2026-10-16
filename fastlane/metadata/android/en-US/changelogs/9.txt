@@ -1,0 +1,4 @@
+The 1.4.0 release got eaten by the void. Its changes are included here.
+Delete reading from your reading log in Kotodex. Clearing history in Kotatsu keeps your reading there.
+Once the space for other sources' covers is full, Kotodex stops downloading them.
+Covers that failed to download wait a day before trying again, however many failed.
