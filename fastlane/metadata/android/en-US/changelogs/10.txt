@@ -1,0 +1,2 @@
+Make a sync password under Settings and sign in to Kotatsu sync with it instead of your Kotodex password. Long Kotodex passwords no longer get cut off in Kotatsu.
+Phones already syncing stay signed in. Make a sync password before signing in again.
