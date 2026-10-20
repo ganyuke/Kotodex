@@ -1,0 +1,5 @@
+Filter a manga's chapters to only official ones.
+Older chapters taken down from MangaDex are listed after updating, not only the newest.
+Pages you add to taken-down chapters are listed as uploads instead of MangaDex downloads.
+On narrower screens, the Downloads summary is shown above the queue instead of covering it.
+URL fields are styled like the other text fields.
