@@ -22,7 +22,7 @@
 {{with .Data.Status.Current}}
 <div class="now-head">
   <div class="ellipsis"><a class="title" href="/manga/{{.MangaID}}">{{.MangaTitle}}</a> <span class="muted">{{.Label}}</span></div>
-  <div class="muted nowrap">{{.Done}} of {{.Total}} pages · {{size .Bytes}}</div>
+  <div class="muted nowrap">{{.Done}} of {{.Total}} pages ({{size .Bytes}})</div>
 </div>
 <progress class="meter" max="{{.Total}}" value="{{.Done}}">{{percent .Done .Total}}%</progress>
 {{else}}

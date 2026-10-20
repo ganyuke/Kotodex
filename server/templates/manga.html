@@ -4,7 +4,7 @@
   <div class="cover">{{if $d.Cover}}<img src="{{$d.Cover}}" alt="">{{end}}</div>
   <div class="info">
     <h1>{{$m.Title}}</h1>
-    {{if $m.Authors}}<p class="muted">{{join $m.Authors ", "}}{{if $m.Year}} · {{$m.Year}}{{end}}</p>{{end}}
+    {{if $m.Authors}}<p class="muted">{{join $m.Authors ", "}}{{if $m.Year}} ({{$m.Year}}){{end}}</p>{{end}}
     <div id="live-progress">{{template "live-progress" .}}</div>
     <dl class="facts" id="live-facts">{{template "live-facts" .}}</dl>
     <div class="buttons">
@@ -222,7 +222,7 @@
 {{$d := .Data}}
     {{with $d.Reading.Mine}}
     <div class="my-progress">
-      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">· {{.Percent100}}% of {{plural .Chapters "chapter"}}</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
+      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">({{.Percent100}}% of {{plural .Chapters "chapter"}})</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
       <progress class="meter" max="100" value="{{.Percent100}}" aria-label="Your progress"></progress>
     </div>
     {{end}}
@@ -254,7 +254,9 @@
 {{range .Data.ChapterFeeds}}
 {{if or $.User.Admin (ne .Source "json")}}
 <div class="row">
-  <span>{{sourceLabel .Source}} · {{.URL}} · Checked {{ago .Checked}}{{if .Error}} · {{.Error}}{{end}}</span>
+  <span>{{sourceLabel .Source}}: {{.URL}}</span>
+  <span class="muted">Checked {{ago .Checked}}</span>
+  {{if .Error}}<span class="bad">{{.Error}}</span>{{end}}
   {{if $.User.Admin}}<form method="post" action="/manga/{{$.Data.Manga.ID}}/feeds"><input type="hidden" name="url" value="{{.URL}}"><input type="hidden" name="source" value="{{.Source}}"><input type="hidden" name="remove" value="1"><button class="small secondary">Disconnect</button></form>{{end}}
 </div>
 {{end}}

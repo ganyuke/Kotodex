@@ -25,7 +25,7 @@
     {{range .Items}}
     <tr>
       <td class="thumbcol">{{template "thumb" .}}</td>
-      <td>{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span> <span class="muted">· {{.SourceName}}</span>{{end}}</td>
+      <td>{{if .Local}}<a class="title" href="/manga/{{.Local.ID}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span> <span class="muted">on {{.SourceName}}</span>{{end}}</td>
       <td><a href="{{people .UserName}}">{{.UserName}}</a></td>
       <td>{{if eq .Kind "list"}}{{if eq .What "Moved from"}}Moved from <span class="pill">{{index .Pills 0}}</span> to <span class="pill">{{index .Pills 1}}</span>{{else}}{{.What}} <span class="pill">{{index .Pills 0}}</span>{{end}}{{else}}{{.What}}{{end}}</td>
       <td class="num">{{if .Time}}{{minutes .Time}}{{end}}</td>

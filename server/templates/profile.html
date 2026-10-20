@@ -3,7 +3,7 @@
 <div class="head">
   <h1>{{$p.Name}}</h1>
   {{if $d.Shows}}<span class="muted">{{plural $d.WeekChapters "chapter"}} and {{$d.WeekTime}} this week</span>{{else}}<span class="muted">Reading not shared</span>{{end}}
-  {{if $d.Me}}<span class="muted buttons">Others see: {{if eq $p.Share "all"}}everything you read{{else if eq $p.Share "kotodex"}}Kotodex manga only{{else}}what you follow{{end}} · <a href="/settings#reading">Change</a></span>{{end}}
+  {{if $d.Me}}<span class="muted buttons">Others see: {{if eq $p.Share "all"}}everything you read{{else if eq $p.Share "kotodex"}}Kotodex manga only{{else}}what you follow{{end}} <a href="/settings#reading">Change</a></span>{{end}}
 </div>
 {{if and $d.Me (not $p.Synced)}}<p class="notice">Your reading shows up here once Kotatsu syncs with Kotodex. Settings has the steps.</p>{{end}}
 
