@@ -3,12 +3,14 @@
   <h1>Downloads</h1>
   <div class="buttons" id="live-actions">{{template "live-actions" .}}</div>
 </div>
-<div class="split">
+<div class="downloads">
+<div class="split downloads-layout">
   <div>
     <section class="card now" id="live-now">{{template "live-now" .}}</section>
     <div id="live-queue">{{template "live-queue" .}}</div>
   </div>
   <aside class="card" id="live-summary">{{template "live-summary" .}}</aside>
+</div>
 </div>
 <div id="live-history">{{template "live-history" .}}</div>
 {{end}}
@@ -73,7 +75,7 @@
   <dt>Next check</dt><dd>{{until $d.NextCheck}}</dd>
   <dt>Queued</dt><dd>{{$d.Queued}}</dd>
   <dt>Failed</dt><dd>{{if $d.Failed}}<span class="bad">{{$d.Failed}}</span>{{else}}0{{end}}</dd>
-  <dt>Downloaded</dt><dd>{{$d.TotalChapters}} chapters</dd>
+  <dt>Downloaded</dt><dd>{{plural $d.TotalChapters "chapter"}}</dd>
   <dt>Disk space</dt><dd>{{size $d.TotalSize}}</dd>
 </dl>
 {{end}}

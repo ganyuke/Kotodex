@@ -137,8 +137,9 @@ table.fixed { table-layout: fixed; }
 .fixed .c-pages { width: 70px; }
 .fixed .c-size { width: 90px; }
 .fixed .c-status { width: 150px; }
-.queue .c-status { width: 200px; }
+.queue .c-status { width: 160px; }
 .fixed .c-actions { width: 130px; }
+.queue .c-actions { width: 110px; }
 .thumbcol { width: 52px; padding-right: 0 !important; }
 .thumb { display: block; width: 40px; height: 57px; object-fit: cover; border-radius: 3px; background: var(--line); }
 tr.state0 td { color: var(--muted); }
@@ -198,6 +199,18 @@ progress.meter::-moz-progress-bar { background: var(--accent); border-radius: 99
 .pager { display: flex; gap: 16px; align-items: center; margin-top: 10px; }
 @media (max-width: 900px) {
   .split { grid-template-columns: 1fr; }
+}
+
+/* The queue's fixed columns need about 1000px. When the page is narrower
+   than that plus the summary, the summary goes above the queue with its
+   figures in rows, and a narrower queue scrolls by itself. */
+.downloads { container-type: inline-size; }
+#live-queue { overflow-x: auto; }
+table.queue { min-width: 1000px; }
+@container (max-width: 1340px) {
+  .downloads-layout { grid-template-columns: minmax(0, 1fr); }
+  .downloads-layout aside { order: -1; margin-bottom: 0; }
+  .downloads-layout aside .facts { grid-template-columns: repeat(auto-fill, minmax(90px, max-content) minmax(120px, 1fr)); }
 }
 
 /* Languages */
