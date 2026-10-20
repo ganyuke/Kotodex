@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,5 +175,47 @@ func TestReadOnKotatsuMangaDex(t *testing.T) {
 	}
 	if strings.Count(body, "Ch. 10, page 5") != 1 || !strings.Contains(body, "Chapter 4 of 12") {
 		t.Fatalf("unmatched manga: %s", body)
+	}
+}
+
+func TestOfficialOnlyFilter(t *testing.T) {
+	s, _ := testServer(t)
+	uid := seed(t, s)
+	s.db.Exec(`INSERT INTO chapter_feeds(manga_id,url,source) VALUES(?,?,?)`, mangaA, "https://mangafire.to/title/x", "mangafire")
+	for _, c := range []*Chapter{
+		{ID: "fan", MangaID: mangaA, Number: "11", Title: "Fan copy", Lang: "en", Source: "mangafire", SourceRef: "1", FeedURL: "https://mangafire.to/title/x"},
+		{ID: "official", MangaID: mangaA, Number: "11", Title: "Official copy", Lang: "en", Official: true, Source: "mangafire", SourceRef: "2", FeedURL: "https://mangafire.to/title/x"},
+	} {
+		if _, err := s.db.insertChapter(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(query string) string {
+		return adminRequest(t, s, uid, "GET", "/manga/"+mangaA+query, nil, "").Body.String()
+	}
+	if body := page("?sources=1&source=mangadex"); strings.Contains(body, "Only official chapters") {
+		t.Fatal("filter offered without official chapters")
+	}
+	body := page("?sources=1&source=mangafire&source=mangadex&official=1")
+	if !strings.Contains(body, "Official copy") || strings.Contains(body, "Fan copy") || strings.Contains(body, `id="c-`+chapter1+`"`) {
+		t.Fatal("official filter shows other chapters")
+	}
+	if !strings.Contains(body, "Download all official English chapters") {
+		t.Fatal("download button doesn't say official")
+	}
+	if !strings.Contains(body, `name="official" value="1" checked`) || strings.Count(body, `<input type="hidden" name="official" value="1">`) != 3 {
+		t.Fatal("other filter forms drop the official filter")
+	}
+	// Remembered, like the other filters.
+	if body := page(""); !strings.Contains(body, "Official copy") || strings.Contains(body, "Fan copy") {
+		t.Fatal("official filter not remembered")
+	}
+	// Download all takes what the table shows.
+	form := url.Values{"sources": {"1"}, "source": {"mangafire"}, "lang": {"en"}, "official": {"1"}}
+	adminRequest(t, s, uid, "POST", "/manga/"+mangaA+"/download-all", bytes.NewBufferString(form.Encode()), "application/x-www-form-urlencoded")
+	fan, _ := s.db.chapter("fan")
+	official, _ := s.db.chapter("official")
+	if official.State != stateQueued || fan.State == stateQueued {
+		t.Fatalf("download all: official %d, fan %d", official.State, fan.State)
 	}
 }

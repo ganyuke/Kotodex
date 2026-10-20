@@ -24,7 +24,7 @@ func selectedChapterSources(values url.Values) []string {
 }
 
 // The query parameters of the chapter table's filters.
-var chapterFilterKeys = []string{"sources", "source", "priority", "prefer", "lang", "unavailable"}
+var chapterFilterKeys = []string{"sources", "source", "priority", "prefer", "lang", "unavailable", "official"}
 
 func chapterFilters(q url.Values) url.Values {
 	out := url.Values{}

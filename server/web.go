@@ -683,11 +683,19 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	// Chapters with no pages to download are hidden unless asked for.
 	// They aren't counted as chapters either, like on the library page.
 	showUnavailable := filters.Get("unavailable") == "1"
+	officialOnly := filters.Get("official") == "1"
 	var listed, downloadable []*Chapter
-	unavailable := 0
+	unavailable, official := 0, 0
 	for _, c := range all {
+		inView := slices.Contains(sources, c.Source) && (shown == nil || slices.Contains(shown, c.Lang))
+		if c.Official && inView {
+			official++
+		}
+		if officialOnly && !c.Official {
+			continue
+		}
 		if c.Unavailable && c.State != stateDone {
-			if slices.Contains(sources, c.Source) && (shown == nil || slices.Contains(shown, c.Lang)) {
+			if inView {
 				unavailable++
 			}
 			if showUnavailable {
@@ -755,7 +763,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": pageQuery(r),
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
 		"FollowCustom":    linked && s.db.followChoice(u.ID, m.ID),
-		"ShowUnavailable": showUnavailable, "Unavailable": unavailable, "Here": strings.TrimSuffix("/manga/"+m.ID+"?"+pageQuery(r), "?"), "SavedFilters": savedFilters,
+		"ShowUnavailable": showUnavailable, "Unavailable": unavailable, "OfficialOnly": officialOnly, "Official": official, "Here": strings.TrimSuffix("/manga/"+m.ID+"?"+pageQuery(r), "?"), "SavedFilters": savedFilters,
 	}})
 }
 
@@ -804,6 +812,9 @@ func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chapters := visibleChapters(all, selectedChapterSources(r.PostForm), r.PostForm["lang"])
+	if r.PostForm.Get("official") == "1" {
+		chapters = slices.DeleteFunc(chapters, func(c *Chapter) bool { return !c.Official })
+	}
 	n, err := s.db.queueMissingChapters(chapters, chapterSourcePriority(r.PostForm))
 	if err != nil {
 		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
