@@ -188,7 +188,7 @@
     </td>{{end}}
     {{end}}
     <td class="actions">
-      {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Make primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
+      {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Set primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
       {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><button class="small link">Cancel</button></form>
       {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Retry</button></form>
       {{else}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Download</button></form>{{end}}

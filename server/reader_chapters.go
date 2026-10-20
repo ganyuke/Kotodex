@@ -128,10 +128,13 @@ func (db *DB) repairChapterPrimaries(mangaID string) error {
 }
 
 func (db *DB) readerChapters(mangaID string) ([]*Chapter, error) {
+	if err := db.alignMangaFireVolumes(mangaID); err != nil {
+		return nil, err
+	}
 	if err := db.repairChapterPrimaries(mangaID); err != nil {
 		return nil, err
 	}
-	return db.queryChapters(`SELECT `+chapterCols+` FROM chapters c JOIN reader_chapters rc
+	return db.queryReadingChapters(mangaID, `SELECT `+chapterCols+` FROM chapters c JOIN reader_chapters rc
 		ON rc.id=c.reader_id AND rc.primary_id=c.id WHERE c.manga_id=? AND c.state=2 ORDER BY `+chapterOrder, mangaID)
 }
 

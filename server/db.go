@@ -154,6 +154,13 @@ func openDB(path string) (*DB, error) {
 			}
 		}
 	}
+	// MangaDex records created before connectors had no attribution URL.
+	// Fill only missing values, preserving already recorded source metadata.
+	if _, err := db.Exec(`UPDATE chapters SET source_ref=coalesce(nullif(source_ref,''),id),
+		source_url=CASE WHEN source_url='' THEN 'https://mangadex.org/chapter/'||coalesce(nullif(source_ref,''),id) ELSE source_url END
+		WHERE source='mangadex' AND (source_ref='' OR source_url='')`); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chapter_feeds(
 		manga_id TEXT NOT NULL REFERENCES manga(id), url TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'json',
 		checked INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
@@ -187,6 +194,9 @@ func openDB(path string) (*DB, error) {
 		return nil, err
 	}
 	if err := initReaderChapters(&DB{DB: db}); err != nil {
+		return nil, err
+	}
+	if err := (&DB{DB: db}).backfillMangaFireVolumes(); err != nil {
 		return nil, err
 	}
 	var hasFeedSource int
@@ -831,14 +841,20 @@ const chapterOrder = `CAST(NULLIF(c.volume,'') AS REAL) IS NULL, CAST(NULLIF(c.v
 const queueOrder = `c.tries, c.queued, c.manga_id, ` + chapterOrder
 
 func (db *DB) chapters(mangaID string) ([]*Chapter, error) {
+	if err := db.alignMangaFireVolumes(mangaID); err != nil {
+		return nil, err
+	}
 	if err := db.repairChapterPrimaries(mangaID); err != nil {
 		return nil, err
 	}
-	return db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? ORDER BY `+chapterOrder, mangaID)
+	return db.queryReadingChapters(mangaID, `SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? ORDER BY `+chapterOrder, mangaID)
 }
 
 func (db *DB) readableChapters(mangaID string) ([]*Chapter, error) {
-	return db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state=2 ORDER BY `+chapterOrder, mangaID)
+	if err := db.alignMangaFireVolumes(mangaID); err != nil {
+		return nil, err
+	}
+	return db.queryReadingChapters(mangaID, `SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state=2 ORDER BY `+chapterOrder, mangaID)
 }
 
 func (db *DB) chapter(id string) (*Chapter, error) {
@@ -896,6 +912,14 @@ func (db *DB) insertChapter(c *Chapter) (bool, error) {
 	normalizeChapter(c)
 	if c.Source == "" {
 		c.Source = "mangadex"
+	}
+	if c.Source == "mangadex" {
+		if c.SourceRef == "" {
+			c.SourceRef = c.ID
+		}
+		if c.SourceURL == "" {
+			c.SourceURL = "https://mangadex.org/chapter/" + c.SourceRef
+		}
 	}
 	remote, _ := json.Marshal(nonNil(c.RemotePages))
 	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key)

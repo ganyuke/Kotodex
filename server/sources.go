@@ -242,6 +242,17 @@ func (d *Downloader) checkFeeds(ctx context.Context, m *Manga) (candidates []*Ch
 			continue
 		}
 		chapters, err := source.Chapters(ctx, feed.URL, true)
+		if err == nil && feed.Source == "mangafire" {
+			var volumes *chapterVolumes
+			volumes, err = d.db.chapterVolumes(m.ID)
+			if err == nil {
+				for _, c := range chapters {
+					if volume := volumes.volume(c); volume != "" {
+						c.Volume = volume
+					}
+				}
+			}
+		}
 		if err == nil {
 			wanted := d.db.wantedLangs(m.ID)
 			for i := len(chapters) - 1; i >= 0; i-- {

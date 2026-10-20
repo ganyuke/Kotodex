@@ -83,7 +83,7 @@ Individual chapter download buttons still let you deliberately pick an alternate
 
 Kotodex gives each chapter a persistent numeric reader ID and associates its
 source copies with that identity. Only the downloaded **Primary** copy is sent
-to Kotatsu, producing one chapter list per language. Use **Make primary** on a
+to Kotatsu, producing one chapter list per language. Use **Set primary** on a
 downloaded alternate to change the copy served under the same reader ID and
 page reference. The source and scanlation group remain attached to each copy.
 Downloading an alternate does not replace an available primary. Deleting the
@@ -103,6 +103,14 @@ such as `Ch. 0012.50` to `12.5`, displayed as `Vol. 2 Ch. 12.5` when a volume is
 known. Different nonempty volume numbers stay distinct; an unspecified volume
 matches either. Numberless extras are kept separate. Identity comparisons use
 exact decimal values, and queuing checks for duplicates atomically.
+
+MangaFire chapter volumes follow MangaDex's metadata for the same manga.
+Matches in the chapter's language take precedence, with other languages used
+only when they agree. Missing chapters can inherit a volume when their known
+neighbours belong to the same volume. Ambiguous boundaries remain unlabeled.
+In series with continuous numbering, chapters with an unresolved volume still
+appear in chapter-number order instead of forming a separate block. Existing
+downloads gain matching volume labels without changing their reader IDs.
 
 Future checks collect newly discovered, recent chapters across connected sources
 before applying the default source priority. Older uploads remain available for
