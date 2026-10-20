@@ -222,7 +222,7 @@
 {{$d := .Data}}
     {{with $d.Reading.Mine}}
     <div class="my-progress">
-      <div class="row"><span>{{.Where}}{{if and .Chapters (not .Finished)}} <span class="muted">({{.Percent100}}% of {{plural .Chapters "chapter"}})</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
+      <div class="row"><span>{{.Where}}{{if and .Chapter .Chapters (not .Finished)}} <span class="muted">(chapter {{.Position}} of {{.Chapters}})</span>{{end}}</span><span class="muted push">Read {{agoMs .Updated}}</span></div>
       <progress class="meter" max="100" value="{{.Percent100}}" aria-label="Your progress"></progress>
     </div>
     {{end}}

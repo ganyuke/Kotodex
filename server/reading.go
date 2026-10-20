@@ -128,6 +128,12 @@ func (p *Place) Finished() bool { return p.Percent >= finishedAt }
 // Percent100 is the progress for <progress> bars.
 func (p *Place) Percent100() int { return int(p.Percent * 100) }
 
+// Position is which chapter of Kotatsu's list someone is on, counting from
+// 1. Kotatsu works out its percent from that position.
+func (p *Place) Position() int {
+	return min(int(p.Percent*float64(p.Chapters))+1, p.Chapters)
+}
+
 // Where says where someone is in words.
 func (p *Place) Where() string {
 	if p.Finished() {
@@ -137,9 +143,9 @@ func (p *Place) Where() string {
 		return fmt.Sprintf("%s, page %d", chapterLabel(p.Chapter), p.Page+1)
 	}
 	if p.Chapters > 0 {
-		return fmt.Sprintf("%d%% of %s", p.Percent100(), plural(p.Chapters, "chapter"))
+		return fmt.Sprintf("Chapter %d of %d", p.Position(), p.Chapters)
 	}
-	return fmt.Sprintf("%d%%", p.Percent100())
+	return fmt.Sprintf("%d%% read", p.Percent100())
 }
 
 // ReadSession is a stretch of reading one manga, from the app's saves.

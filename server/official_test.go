@@ -121,3 +121,21 @@ func TestOfficialGroupMigration(t *testing.T) {
 		t.Fatalf("migrated: %+v %+v", a, b)
 	}
 }
+
+func TestPlaceWhere(t *testing.T) {
+	for _, tc := range []struct {
+		percent  float64
+		chapters int
+		want     string
+	}{
+		{0.04, 43, "Chapter 2 of 43"},
+		{0, 43, "Chapter 1 of 43"},
+		{0.98, 43, "Chapter 43 of 43"},
+		{0.04, 0, "4% read"},
+	} {
+		p := &Place{Percent: tc.percent, Chapters: tc.chapters}
+		if got := p.Where(); got != tc.want {
+			t.Errorf("%v of %d: %q, want %q", tc.percent, tc.chapters, got, tc.want)
+		}
+	}
+}
