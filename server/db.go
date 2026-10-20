@@ -192,6 +192,19 @@ func openDB(path string) (*DB, error) {
 		volume TEXT NOT NULL, number TEXT NOT NULL, title TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
+	// Chapters taken down from MangaDex used to be left out. The next check of
+	// each manga fetches its whole chapter list once, since the quick check
+	// only sees the newest 100 and misses older taken-down chapters.
+	var unavailableVersion string
+	db.QueryRow(`SELECT value FROM settings WHERE key='unavailable_chapters_version'`).Scan(&unavailableVersion)
+	if unavailableVersion != "1" {
+		if _, err := db.Exec(`UPDATE manga SET refreshed=0`); err != nil {
+			return nil, err
+		}
+		if _, err := db.Exec(`INSERT INTO settings(key,value) VALUES('unavailable_chapters_version','1') ON CONFLICT(key) DO UPDATE SET value='1'`); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chapter_feeds(
 		manga_id TEXT NOT NULL REFERENCES manga(id), url TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'json',
 		checked INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',

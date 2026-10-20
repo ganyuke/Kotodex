@@ -382,3 +382,37 @@ func TestMangaChecksOff(t *testing.T) {
 		t.Fatalf("unknown manga: %d", w.Code)
 	}
 }
+
+// Manga checked before taken-down chapters were listed get one full fetch.
+func TestFullFetchAfterUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k.db")
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.upsertManga(&Manga{ID: mangaA, Title: "A"})
+	refreshed := func(db *DB) int64 {
+		var n int64
+		db.QueryRow(`SELECT refreshed FROM manga WHERE id=?`, mangaA).Scan(&n)
+		return n
+	}
+	if refreshed(db) == 0 {
+		t.Fatal("upsert should set refreshed")
+	}
+	db.Close()
+	if db, err = openDB(path); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed(db) == 0 {
+		t.Fatal("full fetch asked for again on a later start")
+	}
+	db.Exec(`DELETE FROM settings WHERE key='unavailable_chapters_version'`)
+	db.Close()
+	if db, err = openDB(path); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if refreshed(db) != 0 {
+		t.Fatal("upgraded database doesn't fetch the full list")
+	}
+}
