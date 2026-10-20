@@ -325,7 +325,7 @@ table.chapters {
 .chapters:has(col.c-pages) { --chapter-pages: 56px; }
 .chapters:has(col.c-you) { --chapter-you: 120px; }
 .chapters:has(col.c-status) { --chapter-status: 144px; }
-.chapters:has(col.c-source) { --chapter-source: 96px; }
+.chapters:has(col.c-source) { --chapter-source: 168px; }
 .chapters .c-chapter { width: var(--chapter-label); }
 .chapters .c-lang { width: var(--chapter-lang); }
 .chapters .c-group { width: var(--chapter-group); }

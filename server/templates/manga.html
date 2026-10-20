@@ -187,8 +187,8 @@
     {{range $d.Columns}}
     {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
     {{else if eq .Name "lang"}}<td title="{{lang $c.Lang}}">{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
-    {{else if eq .Name "source"}}<td title="{{sourceLabel $c.Source}}">{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}</td>
-    {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{if eq $c.Group "Official"}}<span class="pill" title="Official release">Official</span>{{else}}{{$c.Group}}{{end}}</td>
+    {{else if eq .Name "source"}}<td title="{{sourceLabel $c.Source}}{{if $c.Official}}, official release{{end}}">{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}{{if $c.Official}} <span class="pill">Official</span>{{end}}</td>
+    {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{$c.Group}}</td>
     {{else if eq .Name "date"}}<td>{{date $c.Published}}</td>
     {{else if eq .Name "pages"}}<td class="num">{{$c.Pages}}</td>
     {{else if eq .Name "you"}}<td title="{{with index $d.Reading.Chapters $c.ID}}{{.}}{{end}}">{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>

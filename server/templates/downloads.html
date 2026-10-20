@@ -44,7 +44,7 @@
     <td title="{{.MangaTitle}}"><a href="/manga/{{.MangaID}}">{{.MangaTitle}}</a></td>
     <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
     <td>{{with flag .Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang .Lang}}</td>
-    <td title="{{.Group}}">{{.Group}}</td>
+    <td title="{{if .Official}}Official release{{if .Group}}, uploaded by {{.Group}}{{end}}{{else}}{{.Group}}{{end}}">{{if .Official}}<span class="pill">Official</span> {{end}}{{.Group}}</td>
     <td>{{date .Published}}</td>
     <td{{if .Error}} title="{{.Error}}"{{end}}>
       {{if and $d.Status.Current (eq $d.Status.Current.ChapterID .ID)}}<span class="pill active">Downloading</span>
@@ -93,7 +93,7 @@
     <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
     <td title="{{.Title}}">{{.Title}}</td>
     <td>{{with flag .Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang .Lang}}</td>
-    <td title="{{.Group}}">{{.Group}}</td>
+    <td title="{{if .Official}}Official release{{if .Group}}, uploaded by {{.Group}}{{end}}{{else}}{{.Group}}{{end}}">{{if .Official}}<span class="pill">Official</span> {{end}}{{.Group}}</td>
     <td class="num">{{.Pages}}</td>
     <td class="num">{{size .Size}}</td>
   </tr>

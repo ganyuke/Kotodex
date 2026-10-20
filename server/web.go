@@ -604,6 +604,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	all, _ := s.db.chapters(m.ID)
+	s.db.fillMissingTitles(m.ID, all)
 	var size int64
 	for _, c := range all {
 		size += c.Size

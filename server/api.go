@@ -143,6 +143,9 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chapters, err := s.db.readerChapters(m.ID)
+	if err == nil {
+		err = s.db.fillMissingTitles(m.ID, chapters)
+	}
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
@@ -159,10 +162,23 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 		vol, _ := strconv.ParseFloat(c.Volume, 64)
 		out.ChapterList = append(out.ChapterList, apiChapter{
 			ID: c.ID, ReaderID: c.ReaderID, Source: c.Source, SourceURL: c.SourceURL, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
-			Group: c.Group, Published: c.Published * 1000, Pages: len(c.Files),
+			Group: scanlator(c), Published: c.Published * 1000, Pages: len(c.Files),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// scanlator is the line Kotatsu shows under a chapter, its only place to
+// say that a chapter is official. "Official" goes first, so it stays visible
+// when the line is cut off.
+func scanlator(c *Chapter) string {
+	switch {
+	case c.Official && c.Group != "":
+		return "Official (" + c.Group + ")"
+	case c.Official:
+		return "Official"
+	}
+	return c.Group
 }
 
 func (s *Server) apiPages(w http.ResponseWriter, r *http.Request) {

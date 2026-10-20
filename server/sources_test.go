@@ -313,7 +313,7 @@ func TestMangaFireUpstreamSigningAndPagination(t *testing.T) {
 		return nil, errors.New("unexpected endpoint")
 	})}
 	chapters, err := src.Chapters(context.Background(), mangaFireOrigin+"/title/72xyj-kyou-mo-veranda-dee", true)
-	if err != nil || len(chapters) != 2 || calls != 2 || chapters[1].Number != "90.5" || chapters[0].Group != "" || chapters[1].Group != "Official" {
+	if err != nil || len(chapters) != 2 || calls != 2 || chapters[1].Number != "90.5" || chapters[0].Official || !chapters[1].Official {
 		t.Fatalf("chapters: %+v %v calls=%d", chapters, err, calls)
 	}
 	pages, err := src.Pages(context.Background(), chapters[0], false)

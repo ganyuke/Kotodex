@@ -162,9 +162,11 @@ func (s *mangaFireSource) Chapters(ctx context.Context, ref string, _ bool) ([]*
 				return nil, errors.New("MangaFire returned an invalid chapter")
 			}
 			seen[id] = true
+			official := item.Type == "official"
+			title, uploader := mangaFireName(item.Name, official)
 			chapters = append(chapters, &Chapter{Source: "mangafire", SourceRef: id, SourceURL: mangaFireOrigin + "/title/" + hid + "/chapter/" + id,
-				Number: normalizeChapterNumber(item.Number.String()), Title: truncate(item.Name, 500), Lang: item.Language,
-				Group: mangaFireGroup(item.Type), Published: item.CreatedAt})
+				Number: normalizeChapterNumber(item.Number.String()), Title: truncate(title, 500), Lang: item.Language,
+				Group: truncate(uploader, 500), Official: official, Published: item.CreatedAt})
 		}
 		if response.Meta.LastPage <= page {
 			return chapters, nil
@@ -173,13 +175,27 @@ func (s *mangaFireSource) Chapters(ctx context.Context, ref string, _ bool) ([]*
 	return nil, errors.New("MangaFire chapter list exceeds 100 pages")
 }
 
-// MangaFire labels publisher chapters "official" and the rest "unofficial".
-// The group column is where the chapter table shows that split.
-func mangaFireGroup(kind string) string {
-	if kind == "official" {
-		return "Official"
+var (
+	// "Chapter 98 - ", which the chapter label already says.
+	mangaFireChapterPrefix = regexp.MustCompile(`(?i)^chapter\s+[0-9]+(?:\.[0-9]+)?(?:\s*[-:–]\s*|\s+|$)`)
+	// "(nao)" at the end of an official chapter's name is who uploaded it.
+	// Notes with spaces or only digits ("Pt. 1", "(3)") are part of the title.
+	mangaFireUploader = regexp.MustCompile(`\s*\(([^()\s]+)\)$`)
+	onlyDigits        = regexp.MustCompile(`^[0-9]+$`)
+)
+
+// mangaFireName splits a chapter name into its title and, for official
+// chapters, the uploader MangaFire credits in parentheses.
+func mangaFireName(name string, official bool) (title, uploader string) {
+	title = strings.TrimSpace(name)
+	if official {
+		if m := mangaFireUploader.FindStringSubmatchIndex(title); m != nil {
+			if credit := title[m[2]:m[3]]; !onlyDigits.MatchString(credit) {
+				title, uploader = strings.TrimSpace(title[:m[0]]), credit
+			}
+		}
 	}
-	return ""
+	return strings.TrimSpace(mangaFireChapterPrefix.ReplaceAllString(title, "")), uploader
 }
 
 func (s *mangaFireSource) Pages(ctx context.Context, c *Chapter, _ bool) ([]SourcePage, error) {

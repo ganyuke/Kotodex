@@ -146,12 +146,20 @@ func openDB(path string) (*DB, error) {
 		{"source_url", `TEXT NOT NULL DEFAULT ''`},
 		{"remote_pages", `TEXT NOT NULL DEFAULT '[]'`},
 		{"unavailable", `INTEGER NOT NULL DEFAULT 0`},
+		{"official", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		var has int
 		db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name=?`, col.name).Scan(&has)
 		if has == 0 {
 			if _, err := db.Exec(`ALTER TABLE chapters ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
 				return nil, fmt.Errorf("add chapters.%s: %w", col.name, err)
+			}
+			// Official MangaFire chapters used to be marked by their group.
+			// The next check fills in who uploaded them.
+			if col.name == "official" {
+				if _, err := db.Exec(`UPDATE chapters SET official=1,grp='' WHERE source='mangafire' AND grp='Official'`); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -807,16 +815,17 @@ type Chapter struct {
 	FeedURL     string // transient binding guard for discovery; not stored on chapters
 	Unavailable bool   // listed by the source, which has no pages to download
 	Edited      bool   // details changed by an administrator (chapter_edits)
+	Official    bool   // the publisher's release, as the source marks it
 
 	MangaTitle string // filled by queue queries
 }
 
-const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2),c.unavailable,EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id)`
+const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2),c.unavailable,EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id),c.official`
 
 func scanChapter(sc interface{ Scan(...any) error }, extra ...any) (*Chapter, error) {
 	c := &Chapter{}
 	var files, remotePages string
-	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary, &c.Unavailable, &c.Edited}, extra...)
+	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary, &c.Unavailable, &c.Edited, &c.Official}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return nil, err
 	}
@@ -844,7 +853,9 @@ func (db *DB) queryChapters(query string, args ...any) ([]*Chapter, error) {
 
 // chapterOrder sorts chapters oldest first by volume, then chapter number.
 // Numbers are text on MangaDex ("10.5", "" for oneshots), so cast for sorting.
-const chapterOrder = `CAST(NULLIF(c.volume,'') AS REAL) IS NULL, CAST(NULLIF(c.volume,'') AS REAL), CAST(NULLIF(c.number,'') AS REAL), c.published`
+// Of the copies of one chapter, the official one is last, so it is listed
+// first on the manga page, which shows the newest first.
+const chapterOrder = `CAST(NULLIF(c.volume,'') AS REAL) IS NULL, CAST(NULLIF(c.volume,'') AS REAL), CAST(NULLIF(c.number,'') AS REAL), c.official, c.published`
 
 // queueOrder downloads chapters in the order they were queued. Chapters queued
 // at the same time stay together by manga and go in reading order. Chapters
@@ -866,6 +877,35 @@ func (db *DB) readableChapters(mangaID string) ([]*Chapter, error) {
 		return nil, err
 	}
 	return db.queryReadingChapters(mangaID, `SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state=2 ORDER BY `+chapterOrder, mangaID)
+}
+
+// fillMissingTitles shows another copy's title on a copy without one, such as
+// an official release uploaded without its chapter title.
+func (db *DB) fillMissingTitles(mangaID string, chapters []*Chapter) error {
+	rows, err := db.Query(`SELECT lang,number_key,title FROM chapters WHERE manga_id=? AND number_key<>'' AND title<>''
+		ORDER BY official DESC, published`, mangaID)
+	if err != nil {
+		return err
+	}
+	titles := map[[2]string]string{}
+	for rows.Next() {
+		var lang, number, title string
+		if err := rows.Scan(&lang, &number, &title); err != nil {
+			rows.Close()
+			return err
+		}
+		if _, ok := titles[[2]string{lang, number}]; !ok {
+			titles[[2]string{lang, number}] = title
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	for _, c := range chapters {
+		if c.Title == "" {
+			c.Title = titles[[2]string{c.Lang, numberKey(c.Number)}]
+		}
+	}
+	return err
 }
 
 func (db *DB) chapter(id string) (*Chapter, error) {
@@ -933,10 +973,10 @@ func (db *DB) insertChapter(c *Chapter) (bool, error) {
 		}
 	}
 	remote, _ := json.Marshal(nonNil(c.RemotePages))
-	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key,unavailable)
-		SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (?='' OR EXISTS(
+	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key,unavailable,official)
+		SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (?='' OR EXISTS(
 			SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?)) ON CONFLICT(id) DO NOTHING`,
-		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued, c.Source, c.SourceRef, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.Unavailable, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued, c.Source, c.SourceRef, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.Unavailable, c.Official, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
 	if err != nil {
 		return false, err
 	}
@@ -945,9 +985,9 @@ func (db *DB) insertChapter(c *Chapter) (bool, error) {
 		// A chapter that was taken down can't be downloaded any more, so it
 		// leaves the queue. Downloaded pages stay.
 		_, err = db.Exec(`UPDATE chapters SET published=?,pages=CASE WHEN state=2 THEN pages ELSE coalesce(nullif(?,0),pages) END,source_url=?,remote_pages=?,
-				unavailable=?,state=CASE WHEN ? AND state IN (1,3) THEN 0 ELSE state END
+				unavailable=?,official=?,state=CASE WHEN ? AND state IN (1,3) THEN 0 ELSE state END
 				WHERE id=? AND source=? AND manga_id=? AND (?='' OR EXISTS(SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))`,
-			c.Published, c.Pages, c.SourceURL, string(remote), c.Unavailable, c.Unavailable, c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+			c.Published, c.Pages, c.SourceURL, string(remote), c.Unavailable, c.Official, c.Unavailable, c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
 		// Details an administrator edited stay as edited. The source's
 		// version is kept with the edit instead.
 		if err == nil {
