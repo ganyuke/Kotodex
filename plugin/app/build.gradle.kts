@@ -13,8 +13,8 @@ android {
         applicationId = "org.nextcolor.kotodex"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.5.0"
+        versionCode = 11
+        versionName = "1.6.0"
     }
 
     // The release key never lives in the repo. It comes from keystore.properties

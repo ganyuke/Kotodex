@@ -1,0 +1,5 @@
+Connect MangaFire alongside MangaDex and combine chapters in Kotatsu.
+Filter chapters by source and set download priority without downloading duplicate chapters.
+Choose a primary copy while keeping the same chapter identity in Kotatsu.
+Administrators can upload chapters as CBZ or ZIP files.
+Chapter tables use space better and scroll within narrower panes.
