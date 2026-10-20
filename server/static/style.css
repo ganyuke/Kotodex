@@ -345,5 +345,6 @@ table.chapters {
 .chapters td.actions > a { display: block; font-weight: 500; font-size: 13px; line-height: 1.3; }
 .chapters td.actions > * + a { margin-top: 3px; }
 .chapters tr.unavailable td:not(.actions) { opacity: .55; }
+.chapters td .detail-line { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 
 .chapters:not(:has(col.c-title)) .c-chapter { width: auto; }

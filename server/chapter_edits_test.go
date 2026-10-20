@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image/color"
 	"mime/multipart"
 	"net/http"
@@ -156,7 +157,7 @@ func TestUnavailableChapterPages(t *testing.T) {
 	}
 	c, err := s.db.chapter(takenDown)
 	if err != nil || c.State != stateDone || c.Pages != 2 || c.Source != "mangadex" || c.SourceURL != "https://mangadex.org/chapter/"+takenDown ||
-		c.Number != "4" || c.Volume != "2" || c.Title != "Arrival" || c.Group != "Group" || !c.Unavailable || !c.Primary {
+		c.Number != "4" || c.Volume != "2" || c.Title != "Arrival" || c.Group != "Group" || !c.Unavailable || !c.Primary || !c.PagesUploaded {
 		t.Fatalf("chapter kept its MangaDex details: %+v %v", c, err)
 	}
 	if got, err := os.ReadFile(filepath.Join(s.mangaDir, mangaA, takenDown, c.Files[0])); err != nil || !bytes.Equal(got, red) {
@@ -177,9 +178,18 @@ func TestUnavailableChapterPages(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `id="c-`+takenDown+`" class="state2"`) || strings.Contains(w.Body.String(), "unavailable chapter") {
 		t.Fatalf("uploaded chapter row: %s", w.Body)
 	}
+	// Marked as an upload, with MangaDex credited for the details only.
+	row := w.Body.String()[strings.Index(w.Body.String(), `id="c-`+takenDown+`"`):]
+	row = row[:strings.Index(row, "</tr>")]
+	if !strings.Contains(row, `<td>Upload<div class="detail-line">Details from <a href="https://mangadex.org/chapter/`+takenDown+`"`) || !strings.Contains(row, ">Uploaded</span>") || strings.Contains(row, ">Downloaded<") {
+		t.Fatalf("upload not marked: %s", row)
+	}
+	if got := chapterAPISource(t, s, member, takenDown); got != "upload|" {
+		t.Fatalf("kotatsu source: %s", got)
+	}
 	// Deleting the pages makes it unavailable again.
 	adminRequest(t, s, admin, "POST", "/chapter/"+takenDown+"/delete", nil, "")
-	if c, err := s.db.chapter(takenDown); err != nil || c.State != stateSkipped || !c.Unavailable {
+	if c, err := s.db.chapter(takenDown); err != nil || c.State != stateSkipped || !c.Unavailable || c.PagesUploaded {
 		t.Fatalf("deleted: %+v %v", c, err)
 	}
 
@@ -414,5 +424,52 @@ func TestFullFetchAfterUpgrade(t *testing.T) {
 	defer db.Close()
 	if refreshed(db) != 0 {
 		t.Fatal("upgraded database doesn't fetch the full list")
+	}
+}
+
+// chapterAPISource is the source and its link the plugin gets for a chapter.
+func chapterAPISource(t *testing.T, s *Server, uid int64, id string) string {
+	t.Helper()
+	token, _ := s.db.createSession(uid, "kotatsu", "test")
+	req := httptest.NewRequest("GET", "/api/v1/manga/"+mangaA, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, req)
+	var out struct {
+		ChapterList []apiChapter `json:"chapterList"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &out)
+	for _, c := range out.ChapterList {
+		if c.ID == id {
+			return c.Source + "|" + c.SourceURL
+		}
+	}
+	t.Fatalf("chapter %s not sent: %s", id, w.Body)
+	return ""
+}
+
+// Pages added in 1.7.0 weren't marked as uploaded.
+func TestPagesUploadedMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k.db")
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.upsertManga(&Manga{ID: mangaA, Title: "A"})
+	db.Exec(`INSERT INTO chapters(id,manga_id,number,lang,unavailable,state,queued,downloaded) VALUES
+		('uploaded',?,'1','en',1,2,0,1792500000),
+		('downloaded-before',?,'2','en',1,2,1792400000,1792400100),
+		('old',?,'3','en',1,2,0,1600000000),
+		('available',?,'4','en',0,2,0,1792500000)`, mangaA, mangaA, mangaA, mangaA)
+	db.Exec(`ALTER TABLE chapters DROP COLUMN pages_uploaded`)
+	db.Close()
+	if db, err = openDB(path); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for id, want := range map[string]bool{"uploaded": true, "downloaded-before": false, "old": false, "available": false} {
+		if c, err := db.chapter(id); err != nil || c.PagesUploaded != want {
+			t.Errorf("%s: %v %v", id, c.PagesUploaded, err)
+		}
 	}
 }

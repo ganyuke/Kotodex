@@ -443,7 +443,7 @@ func (d *Downloader) deleteChapterFiles(c *Chapter) error {
 		d.Changed()
 		return err
 	}
-	_, err := d.db.Exec(`UPDATE chapters SET state=0, files='[]', size=0, downloaded=0, tries=0, error='' WHERE id=?`, c.ID)
+	_, err := d.db.Exec(`UPDATE chapters SET state=0, files='[]', size=0, downloaded=0, tries=0, error='', pages_uploaded=0 WHERE id=?`, c.ID)
 	d.Changed()
 	return err
 }

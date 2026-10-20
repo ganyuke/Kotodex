@@ -7,8 +7,10 @@
   </div>
 </div>
 <dl class="facts wide">
-  <dt>Source</dt><dd>{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{$src}}</a>{{else}}{{$src}}{{end}}{{if $c.Official}} <span class="pill">Official</span>{{end}}</dd>
-  <dt>Status</dt><dd>{{if eq $c.State 2}}Downloaded, {{plural $c.Pages "page"}}{{else if eq $c.State 1}}Queued{{else if eq $c.State 3}}Failed{{else if $c.Unavailable}}Unavailable on {{$src}}{{else}}Not downloaded{{end}}</dd>
+  {{if $c.PagesUploaded}}<dt>Pages</dt><dd>Uploaded by an administrator</dd>
+  <dt>Details</dt><dd>{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{$src}}</a>{{else}}{{$src}}{{end}}</dd>
+  {{else}}<dt>Source</dt><dd>{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{$src}}</a>{{else}}{{$src}}{{end}}{{if $c.Official}} <span class="pill">Official</span>{{end}}</dd>{{end}}
+  <dt>Status</dt><dd>{{if and (eq $c.State 2) $c.PagesUploaded}}Uploaded, {{plural $c.Pages "page"}}{{else if eq $c.State 2}}Downloaded, {{plural $c.Pages "page"}}{{else if eq $c.State 1}}Queued{{else if eq $c.State 3}}Failed{{else if $c.Unavailable}}Unavailable on {{$src}}{{else}}Not downloaded{{end}}</dd>
   {{if $c.Published}}<dt>Released</dt><dd>{{date $c.Published}}</dd>{{end}}
 </dl>
 <div class="columns">

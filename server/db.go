@@ -161,6 +161,7 @@ func openDB(path string) (*DB, error) {
 		{"remote_pages", `TEXT NOT NULL DEFAULT '[]'`},
 		{"unavailable", `INTEGER NOT NULL DEFAULT 0`},
 		{"official", `INTEGER NOT NULL DEFAULT 0`},
+		{"pages_uploaded", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		var has int
 		db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name=?`, col.name).Scan(&has)
@@ -172,6 +173,14 @@ func openDB(path string) (*DB, error) {
 			// The next check fills in who uploaded them.
 			if col.name == "official" {
 				if _, err := db.Exec(`UPDATE chapters SET official=1,grp='' WHERE source='mangafire' AND grp='Official'`); err != nil {
+					return nil, err
+				}
+			}
+			// Pages added to taken-down chapters in 1.7.0 weren't marked.
+			// Those never went through the download queue (queued=0), and
+			// the feature came out on October 20, 2026.
+			if col.name == "pages_uploaded" {
+				if _, err := db.Exec(`UPDATE chapters SET pages_uploaded=1 WHERE unavailable=1 AND state=2 AND queued=0 AND downloaded>=1792454400`); err != nil {
 					return nil, err
 				}
 			}
@@ -836,24 +845,25 @@ type Chapter struct {
 	Downloaded int64
 	Queued     int64 // only set for insertChapter
 
-	Source      string
-	SourceRef   string
-	SourceURL   string
-	RemotePages []string
-	FeedURL     string // transient binding guard for discovery; not stored on chapters
-	Unavailable bool   // listed by the source, which has no pages to download
-	Edited      bool   // details changed by an administrator (chapter_edits)
-	Official    bool   // the publisher's release, as the source marks it
+	Source        string
+	SourceRef     string
+	SourceURL     string
+	RemotePages   []string
+	FeedURL       string // transient binding guard for discovery; not stored on chapters
+	Unavailable   bool   // listed by the source, which has no pages to download
+	Edited        bool   // details changed by an administrator (chapter_edits)
+	Official      bool   // the publisher's release, as the source marks it
+	PagesUploaded bool   // pages added by an administrator, not downloaded from the source
 
 	MangaTitle string // filled by queue queries
 }
 
-const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2),c.unavailable,EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id),c.official`
+const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2),c.unavailable,EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id),c.official,c.pages_uploaded`
 
 func scanChapter(sc interface{ Scan(...any) error }, extra ...any) (*Chapter, error) {
 	c := &Chapter{}
 	var files, remotePages string
-	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary, &c.Unavailable, &c.Edited, &c.Official}, extra...)
+	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary, &c.Unavailable, &c.Edited, &c.Official, &c.PagesUploaded}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return nil, err
 	}

@@ -189,6 +189,7 @@
     {{range $d.Columns}}
     {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
     {{else if eq .Name "lang"}}<td title="{{lang $c.Lang}}">{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
+    {{else if and (eq .Name "source") $c.PagesUploaded}}<td>Upload<div class="detail-line">Details from {{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}</div></td>
     {{else if eq .Name "source"}}<td title="{{sourceLabel $c.Source}}{{if $c.Official}}, official release{{end}}">{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}{{if $c.Official}} <span class="pill">Official</span>{{end}}</td>
     {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{$c.Group}}</td>
     {{else if eq .Name "date"}}<td>{{date $c.Published}}</td>
@@ -196,6 +197,7 @@
     {{else if eq .Name "you"}}<td title="{{with index $d.Reading.Chapters $c.ID}}{{.}}{{end}}">{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
     {{else if eq .Name "status"}}<td>
       {{if and $d.Current (eq $d.Current.ChapterID $c.ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
+      {{else if and (eq $c.State 2) $c.PagesUploaded}}<span title="{{date $c.Downloaded}}">Uploaded</span>
       {{else if eq $c.State 2}}<span title="{{date $c.Downloaded}}">Downloaded</span>
       {{else if eq $c.State 1}}<span class="pill">Queued</span>
       {{else if eq $c.State 3}}<span class="pill bad" title="{{$c.Error}}">Failed</span>

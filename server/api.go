@@ -160,8 +160,12 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 			num = &n
 		}
 		vol, _ := strconv.ParseFloat(c.Volume, 64)
+		source, sourceURL := c.Source, c.SourceURL
+		if c.PagesUploaded { // only the details came from the source
+			source, sourceURL = "upload", ""
+		}
 		out.ChapterList = append(out.ChapterList, apiChapter{
-			ID: c.ID, ReaderID: c.ReaderID, Source: c.Source, SourceURL: c.SourceURL, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
+			ID: c.ID, ReaderID: c.ReaderID, Source: source, SourceURL: sourceURL, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
 			Group: scanlator(c), Published: c.Published * 1000, Pages: len(c.Files),
 		})
 	}

@@ -356,7 +356,7 @@ func (s *Server) chapterPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	list, _ := json.Marshal(files)
-	res, err := s.db.Exec(`UPDATE chapters SET pages=?,state=2,files=?,size=?,downloaded=?,error='',tries=0
+	res, err := s.db.Exec(`UPDATE chapters SET pages=?,state=2,files=?,size=?,downloaded=?,error='',tries=0,pages_uploaded=1
 		WHERE id=? AND unavailable=1 AND state<>2`, len(files), string(list), size, now(), c.ID)
 	n := int64(0)
 	if err == nil {
