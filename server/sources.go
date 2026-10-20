@@ -36,12 +36,16 @@ func (s mangaDexSource) Chapters(ctx context.Context, ref string, full bool) ([]
 	}
 	var out []*Chapter
 	for _, item := range feed {
-		if item.readable() {
-			c := item.toChapter(ref)
-			normalizeChapter(c)
-			c.Source, c.SourceRef, c.SourceURL = "mangadex", c.ID, "https://mangadex.org/chapter/"+c.ID
-			out = append(out, c)
+		// External chapters only link to a publisher. Unavailable chapters
+		// stay in the list so their pages can be added by hand.
+		if item.Attributes.ExternalURL != nil {
+			continue
 		}
+		c := item.toChapter(ref)
+		c.Unavailable = !item.readable()
+		normalizeChapter(c)
+		c.Source, c.SourceRef, c.SourceURL = "mangadex", c.ID, "https://mangadex.org/chapter/"+c.ID
+		out = append(out, c)
 	}
 	return out, nil
 }

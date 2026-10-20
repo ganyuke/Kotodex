@@ -108,7 +108,8 @@ func (db *DB) alignMangaFireVolumes(mangaID string) error {
 	if err != nil {
 		return err
 	}
-	chapters, err := db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE manga_id=? AND source='mangafire'`, mangaID)
+	chapters, err := db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE manga_id=? AND source='mangafire'
+		AND NOT EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id)`, mangaID)
 	if err != nil {
 		return err
 	}

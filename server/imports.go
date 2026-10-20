@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path"
@@ -78,13 +79,21 @@ func naturalCompare(a, b string) int {
 	return strings.Compare(a, b)
 }
 
+// pageFile is one page an administrator uploaded, from an archive or as a
+// file of its own. Only its name is used, for sorting.
+type pageFile struct {
+	name string
+	size int64
+	open func() (io.ReadCloser, error)
+}
+
 // extractChapter never writes archive paths. Only validated image bytes are
 // copied to generated filenames, with independent per-page and total limits.
 func extractChapter(z *zip.Reader, dir string) ([]string, int64, error) {
 	if len(z.File) > 2000 {
 		return nil, 0, shownError("Archive has too many entries.")
 	}
-	var pages []*zip.File
+	var pages []pageFile
 	seen := map[string]bool{}
 	for _, f := range z.File {
 		if f.FileInfo().IsDir() {
@@ -100,31 +109,38 @@ func extractChapter(z *zip.Reader, dir string) ([]string, int64, error) {
 			return nil, 0, shownError("Archive contains duplicate page names.")
 		}
 		seen[f.Name] = true
-		if f.UncompressedSize64 > maxSourcePage {
-			return nil, 0, shownError("A page exceeds 32 MiB.")
-		}
-		pages = append(pages, f)
+		pages = append(pages, pageFile{f.Name, int64(min(f.UncompressedSize64, maxSourcePage+1)), f.Open})
 	}
+	return savePages(pages, dir, "Archive contains a page that is not a supported image.")
+}
+
+// savePages writes pages in filename order as 001.jpg, 002.png, and so on.
+func savePages(pages []pageFile, dir, notImage string) ([]string, int64, error) {
 	if len(pages) == 0 || len(pages) > 1000 {
 		return nil, 0, shownError("Upload must contain between 1 and 1000 image pages.")
 	}
-	slices.SortFunc(pages, func(a, b *zip.File) int {
-		if n := naturalCompare(a.Name, b.Name); n != 0 {
+	for _, p := range pages {
+		if p.size > maxSourcePage {
+			return nil, 0, shownError("A page exceeds 32 MiB.")
+		}
+	}
+	slices.SortStableFunc(pages, func(a, b pageFile) int {
+		if n := naturalCompare(a.name, b.name); n != 0 {
 			return n
 		}
-		return strings.Compare(a.Name, b.Name)
+		return strings.Compare(a.name, b.name)
 	})
 	var names []string
 	var size int64
-	for i, f := range pages {
-		r, err := f.Open()
+	for i, p := range pages {
+		r, err := p.open()
 		if err != nil {
-			return nil, 0, shownError("Could not read the archive.")
+			return nil, 0, shownError("Could not read a page.")
 		}
 		data, err := io.ReadAll(io.LimitReader(r, maxSourcePage+1))
 		r.Close()
 		if err != nil {
-			return nil, 0, shownError("Could not read a page from the archive.")
+			return nil, 0, shownError("Could not read a page.")
 		}
 		size += int64(len(data))
 		if len(data) > maxSourcePage || size > maxExpandedUpload {
@@ -132,7 +148,7 @@ func extractChapter(z *zip.Reader, dir string) ([]string, int64, error) {
 		}
 		ext, ok := coverTypes[http.DetectContentType(data)]
 		if !ok {
-			return nil, 0, shownError("Archive contains a page that is not a supported image.")
+			return nil, 0, shownError(notImage)
 		}
 		name := fmt.Sprintf("%03d.%s", i+1, ext)
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
@@ -176,6 +192,16 @@ func (s *Server) mangaUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	switch strings.ToLower(path.Ext(header.Filename)) {
+	case ".cbz", ".zip":
+	default:
+		s.errorPage(w, r, http.StatusBadRequest, "Choose a CBZ or ZIP file.")
+		return
+	}
+	if header.Size > maxUpload {
+		s.errorPage(w, r, http.StatusBadRequest, "Upload a CBZ or ZIP under 256 MiB.")
+		return
+	}
 	z, err := zip.NewReader(f, header.Size)
 	if err != nil {
 		s.errorPage(w, r, http.StatusBadRequest, "Could not read the CBZ or ZIP file.")
@@ -229,6 +255,133 @@ func (s *Server) mangaUpload(w http.ResponseWriter, r *http.Request) {
 	s.db.Exec(`UPDATE manga SET latest=? WHERE id=?`, now(), m.ID)
 	s.dl.Changed()
 	back(w, r, "/manga/"+m.ID, "Chapter uploaded.")
+}
+
+// chapterPages adds pages to a chapter the source lists but has no pages
+// for, such as one taken down from MangaDex. The chapter keeps its details
+// and its link to the source. The pages are images, or one CBZ or ZIP.
+func (s *Server) chapterPages(w http.ResponseWriter, r *http.Request) {
+	c, err := s.db.chapter(r.PathValue("id"))
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	if !c.Unavailable || c.State == stateDone {
+		s.errorPage(w, r, http.StatusConflict, "This chapter already has pages.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxExpandedUpload+1<<20)
+	err = r.ParseMultipartForm(8 << 20)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	if err != nil {
+		s.errorPage(w, r, http.StatusBadRequest, "Upload pages under 512 MiB in total.")
+		return
+	}
+	var pages []pageFile
+	var archive *multipart.FileHeader
+	for _, f := range r.MultipartForm.File["pages"] {
+		// Folders bring along files the system made.
+		name := path.Base(f.Filename)
+		if strings.HasPrefix(name, ".") || strings.EqualFold(name, "thumbs.db") || strings.EqualFold(name, "desktop.ini") {
+			continue
+		}
+		switch ext := strings.ToLower(path.Ext(name)); {
+		case ext == ".cbz" || ext == ".zip":
+			archive = f
+		case imageExtension(ext):
+			pages = append(pages, pageFile{name, f.Size, func() (io.ReadCloser, error) { return f.Open() }})
+		default:
+			s.errorPage(w, r, http.StatusBadRequest, "Choose JPEG, PNG, WebP, or GIF pages, or one CBZ or ZIP.")
+			return
+		}
+	}
+	if archive != nil && (len(pages) > 0 || len(r.MultipartForm.File["pages"]) > 1) || archive == nil && len(pages) == 0 {
+		s.errorPage(w, r, http.StatusBadRequest, "Choose JPEG, PNG, WebP, or GIF pages, or one CBZ or ZIP.")
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(s.mangaDir, c.MangaID), 0o755); err != nil {
+		s.errorPage(w, r, 500, userMessage(err))
+		return
+	}
+	stage, err := os.MkdirTemp(filepath.Join(s.mangaDir, c.MangaID), ".upload-")
+	if err != nil {
+		s.errorPage(w, r, 500, userMessage(err))
+		return
+	}
+	defer os.RemoveAll(stage)
+	var files []string
+	var size int64
+	if archive != nil {
+		if archive.Size > maxUpload {
+			s.errorPage(w, r, http.StatusBadRequest, "Upload a CBZ or ZIP under 256 MiB.")
+			return
+		}
+		f, err := archive.Open()
+		if err != nil {
+			s.errorPage(w, r, http.StatusBadRequest, "Could not read the CBZ or ZIP file.")
+			return
+		}
+		defer f.Close()
+		z, err := zip.NewReader(f, archive.Size)
+		if err != nil {
+			s.errorPage(w, r, http.StatusBadRequest, "Could not read the CBZ or ZIP file.")
+			return
+		}
+		files, size, err = extractChapter(z, stage)
+		if err != nil {
+			s.errorPage(w, r, http.StatusBadRequest, userMessage(err))
+			return
+		}
+	} else if files, size, err = savePages(pages, stage, "A page is not a supported image."); err != nil {
+		s.errorPage(w, r, http.StatusBadRequest, userMessage(err))
+		return
+	}
+	// Two uploads to one chapter would share its folder.
+	s.pagesMu.Lock()
+	defer s.pagesMu.Unlock()
+	if c, err = s.db.chapter(c.ID); err != nil || !c.Unavailable || c.State == stateDone {
+		s.errorPage(w, r, http.StatusConflict, "This chapter already has pages.")
+		return
+	}
+	dest := filepath.Join(s.mangaDir, c.MangaID, c.ID)
+	// Pages left from a download before the chapter was taken down.
+	if err := os.RemoveAll(dest); err != nil {
+		s.errorPage(w, r, 500, userMessage(err))
+		return
+	}
+	if err := os.Rename(stage, dest); err != nil {
+		s.errorPage(w, r, 500, userMessage(err))
+		return
+	}
+	list, _ := json.Marshal(files)
+	res, err := s.db.Exec(`UPDATE chapters SET pages=?,state=2,files=?,size=?,downloaded=?,error='',tries=0
+		WHERE id=? AND unavailable=1 AND state<>2`, len(files), string(list), size, now(), c.ID)
+	n := int64(0)
+	if err == nil {
+		n, err = res.RowsAffected()
+	}
+	if err != nil || n == 0 {
+		os.RemoveAll(dest)
+		if err != nil {
+			s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+			return
+		}
+		s.errorPage(w, r, http.StatusConflict, "This chapter already has pages.")
+		return
+	}
+	if err := s.db.bindReaderChapter(c.ID, false); err != nil {
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+		return
+	}
+	if err := s.db.repairChapterPrimaries(c.MangaID); err != nil {
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+		return
+	}
+	s.db.Exec(`UPDATE manga SET latest=? WHERE id=?`, now(), c.MangaID)
+	s.dl.Changed()
+	back(w, r, "/manga/"+c.MangaID, plural(len(files), "page")+" added.")
 }
 
 func (s *Server) mangaFeed(w http.ResponseWriter, r *http.Request) {

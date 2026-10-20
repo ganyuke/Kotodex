@@ -1,0 +1,48 @@
+{{define "content"}}
+{{$d := .Data}}{{$c := $d.Chapter}}{{$o := $d.Original}}{{$src := sourceLabel $c.Source}}
+<div class="head">
+  <div>
+    <p class="muted crumb"><a href="{{$d.Next}}">{{$d.Manga.Title}}</a></p>
+    <h1>{{chapterLabel $c}}{{if $c.Title}} <span class="muted">{{$c.Title}}</span>{{end}}</h1>
+  </div>
+</div>
+<dl class="facts wide">
+  <dt>Source</dt><dd>{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{$src}}</a>{{else}}{{$src}}{{end}}</dd>
+  <dt>Status</dt><dd>{{if eq $c.State 2}}Downloaded, {{plural $c.Pages "page"}}{{else if eq $c.State 1}}Queued{{else if eq $c.State 3}}Failed{{else if $c.Unavailable}}Unavailable on {{$src}}{{else}}Not downloaded{{end}}</dd>
+  {{if $c.Published}}<dt>Released</dt><dd>{{date $c.Published}}</dd>{{end}}
+</dl>
+<div class="columns">
+  {{if $d.AddPages}}
+  <section class="card" id="pages">
+    <h2>Pages</h2>
+    <form method="post" action="/chapter/{{$c.ID}}/pages" enctype="multipart/form-data" hx-boost="false" class="stack upload" data-upload>
+      <input type="hidden" name="next" value="{{$d.Next}}">
+      <p class="muted">Choose the chapter's pages as JPEG, PNG, WebP, or GIF files, or one CBZ or ZIP. Pages are sorted by filename (page2 before page10).</p>
+      <div class="buttons">
+        <label class="button secondary">Choose files<input type="file" name="pages" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.cbz,.zip,image/jpeg,image/png,image/webp,image/gif" hidden></label>
+        <label class="button secondary">Choose folder<input type="file" name="pages" webkitdirectory hidden></label>
+      </div>
+      <p class="muted" data-upload-chosen>No pages chosen</p>
+      <progress class="meter" max="1" value="0" hidden aria-label="Upload progress"></progress>
+      <p data-upload-status hidden></p>
+      <button>Upload pages</button>
+    </form>
+  </section>
+  {{end}}
+  <section class="card">
+    <h2>Details</h2>
+    <form method="post" action="/chapter/{{$c.ID}}/edit" class="stack">
+      <input type="hidden" name="next" value="{{$d.Next}}">
+      <label><span>Chapter{{if and $o (ne $o.Number $c.Number)}} <span class="muted">({{$src}}: {{or $o.Number "none"}})</span>{{end}}</span><input name="number" value="{{$c.Number}}" maxlength="40" placeholder="None"></label>
+      <label><span>Volume{{if and $o (ne $o.Volume $c.Volume)}} <span class="muted">({{$src}}: {{or $o.Volume "none"}})</span>{{end}}</span><input name="volume" value="{{$c.Volume}}" maxlength="40" placeholder="None"></label>
+      <label><span>Language{{if and $o (ne $o.Lang $c.Lang)}} <span class="muted">({{$src}}: {{lang $o.Lang}})</span>{{end}}</span><select name="lang">{{range $d.Langs}}<option value="{{.Code}}"{{if eq .Code $c.Lang}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+      <label><span>Title{{if and $o (ne $o.Title $c.Title)}} <span class="muted">({{$src}}: {{or $o.Title "none"}})</span>{{end}}</span><input name="title" value="{{$c.Title}}" maxlength="500"></label>
+      <label><span>Scanlation group{{if and $o (ne $o.Group $c.Group)}} <span class="muted">({{$src}}: {{or $o.Group "none"}})</span>{{end}}</span><input name="group" value="{{$c.Group}}" maxlength="500"></label>
+      <div class="buttons">
+        <button>Save</button>
+        {{if $o}}<button class="secondary" formaction="/chapter/{{$c.ID}}/restore">Restore {{$src}} details</button>{{end}}
+      </div>
+    </form>
+  </section>
+</div>
+{{end}}

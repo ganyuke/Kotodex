@@ -338,8 +338,11 @@ func (m *MangaDex) feed(ctx context.Context, mangaID string, langs []string, all
 		q.Set("order[readableAt]", "desc")
 		// Leave out official publisher chapters, which only link elsewhere, so
 		// they don't crowd real uploads out of the quick check's newest page.
+		// Chapters taken down (DMCA) are left out unless asked for. They keep
+		// their metadata and page count, so pages can be added by hand.
 		q.Set("includeExternalUrl", "0")
 		q.Set("includeEmptyPages", "0")
+		q.Set("includeUnavailable", "1")
 		for _, l := range langs {
 			q.Add("translatedLanguage[]", l)
 		}

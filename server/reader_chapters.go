@@ -58,6 +58,10 @@ func initReaderChapters(db *DB) error {
 func (db *DB) bindReaderChapter(releaseID string, legacy bool) error {
 	db.readerMu.Lock()
 	defer db.readerMu.Unlock()
+	return db.bindReaderChapterLocked(releaseID, legacy)
+}
+
+func (db *DB) bindReaderChapterLocked(releaseID string, legacy bool) error {
 	c, err := db.chapter(releaseID)
 	if errors.Is(err, sql.ErrNoRows) { // a source was disconnected during discovery
 		return nil
@@ -113,6 +117,68 @@ func (db *DB) bindReaderChapter(releaseID string, legacy bool) error {
 		}
 	}
 	_, err = db.Exec(`UPDATE chapters SET reader_id=? WHERE id=? AND reader_id IS NULL`, id, c.ID)
+	return err
+}
+
+// rebindReaderChapter follows an edit of a copy's language, number, or
+// volume. A copy alone in its reader chapter keeps that identity, so reading
+// progress stays, unless exactly one other reader chapter now matches. A copy
+// that shared its reader chapter leaves it and is bound like a new copy.
+func (db *DB) rebindReaderChapter(releaseID string) error {
+	db.readerMu.Lock()
+	defer db.readerMu.Unlock()
+	c, err := db.chapter(releaseID)
+	if err != nil {
+		return err
+	}
+	if c.ReaderID == 0 {
+		return db.bindReaderChapterLocked(c.ID, false)
+	}
+	number, volume := numberKey(c.Number), numberKey(c.Volume)
+	var lang, oldNumber, oldVolume, anchor string
+	if err := db.QueryRow(`SELECT lang,number_key,volume_key,anchor_id FROM reader_chapters WHERE id=?`, c.ReaderID).Scan(&lang, &oldNumber, &oldVolume, &anchor); err != nil {
+		return err
+	}
+	if lang == c.Lang && oldNumber == number && (oldVolume == volume || volume == "") {
+		return nil
+	}
+	var others int
+	if err := db.QueryRow(`SELECT count(*) FROM chapters WHERE reader_id=? AND id<>?`, c.ReaderID, c.ID).Scan(&others); err != nil {
+		return err
+	}
+	if others > 0 {
+		if anchor == c.ID {
+			if _, err := db.Exec(`UPDATE reader_chapters SET anchor_id=(SELECT min(id) FROM chapters WHERE reader_id=? AND id<>?) WHERE id=?`, c.ReaderID, c.ID, c.ReaderID); err != nil {
+				return err
+			}
+		}
+		if _, err := db.Exec(`UPDATE chapters SET reader_id=NULL WHERE id=?`, c.ID); err != nil {
+			return err
+		}
+		return db.bindReaderChapterLocked(c.ID, false)
+	}
+	var count int
+	var match int64
+	if number != "" {
+		if err := db.QueryRow(`SELECT count(*),coalesce(min(id),0) FROM reader_chapters
+			WHERE manga_id=? AND lang=? AND number_key=? AND (volume_key=? OR volume_key='' OR ?='') AND id<>?`,
+			c.MangaID, c.Lang, number, volume, volume, c.ReaderID).Scan(&count, &match); err != nil {
+			return err
+		}
+	}
+	if count == 1 {
+		if _, err := db.Exec(`UPDATE chapters SET reader_id=? WHERE id=?`, match, c.ID); err != nil {
+			return err
+		}
+		if volume != "" {
+			if _, err := db.Exec(`UPDATE reader_chapters SET volume_key=? WHERE id=? AND volume_key=''`, volume, match); err != nil {
+				return err
+			}
+		}
+		_, err = db.Exec(`DELETE FROM reader_chapters WHERE id=? AND NOT EXISTS(SELECT 1 FROM chapters WHERE reader_id=?)`, c.ReaderID, c.ReaderID)
+		return err
+	}
+	_, err = db.Exec(`UPDATE reader_chapters SET lang=?,number_key=?,volume_key=? WHERE id=?`, c.Lang, number, volume, c.ReaderID)
 	return err
 }
 

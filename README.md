@@ -126,6 +126,13 @@ or downloaded chapter are refused; **Allow an alternate edition** explicitly kee
 another version. Deleting an upload removes its record because there is no remote
 copy to retry. Reverse proxies must allow request bodies large enough for uploads.
 
+MangaDex chapters taken down for copyright are listed but hidden. Check
+**Show unavailable chapters** on the manga's page to see them. Administrators can
+use **Add pages** to upload the chapter as images, a folder, or one CBZ or ZIP.
+Its MangaDex details and link are kept. Use **Edit** on any chapter to change
+its number, volume, language, title, or group. Edits are not undone by later
+checks. Use **Restore MangaDex details** to undo an edit.
+
 Downloaded MangaFire and feed pages preserve the source's bytes. Kotodex cannot
 promise that another source has the same resolution, edition, translation, or
 scanlation as MangaDex. The Data saver setting applies to MangaDex only. Source

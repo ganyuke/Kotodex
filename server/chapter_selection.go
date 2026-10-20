@@ -83,7 +83,7 @@ func (db *DB) queueMissingChapters(chapters []*Chapter, priority []string) (int,
 	slices.SortStableFunc(ordered, func(a, b *Chapter) int { return compareChapterReleases(a, b, priority) })
 	n, at := 0, now()
 	for _, c := range ordered {
-		res, err := db.Exec(`UPDATE chapters SET state=1,tries=0,error='',queued=? WHERE id=? AND state IN (0,3)
+		res, err := db.Exec(`UPDATE chapters SET state=1,tries=0,error='',queued=? WHERE id=? AND state IN (0,3) AND unavailable=0
 			AND (?='' OR EXISTS(SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))
 			AND NOT EXISTS(SELECT 1 FROM chapters other WHERE other.manga_id=chapters.manga_id
 				AND other.lang=chapters.lang AND other.state IN (1,2) AND chapters.number_key<>''

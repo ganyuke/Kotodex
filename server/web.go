@@ -393,6 +393,13 @@ func back(w http.ResponseWriter, r *http.Request, fallback, notice string) {
 		value := url.Values{"path": {path}, "text": {notice}}.Encode()
 		setCookie(w, r, &http.Cookie{Name: noticeCookie, Value: value, Path: path, MaxAge: 60})
 	}
+	// A script upload (app.js) would follow a redirect itself and take the
+	// notice with it. It goes to the page on its own instead.
+	if r.Header.Get("Kotodex-Upload") == "1" {
+		w.Header().Set("Kotodex-Location", next)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
@@ -671,12 +678,30 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	for _, source := range sources {
 		selectedSources[source] = true
 	}
-	chapters := visibleChapters(all, sources, shown)
+	// Chapters with no pages to download are hidden unless asked for.
+	// They aren't counted as chapters either, like on the library page.
+	showUnavailable := r.URL.Query().Get("unavailable") == "1"
+	var listed, downloadable []*Chapter
+	unavailable := 0
+	for _, c := range all {
+		if c.Unavailable && c.State != stateDone {
+			if slices.Contains(sources, c.Source) && (shown == nil || slices.Contains(shown, c.Lang)) {
+				unavailable++
+			}
+			if showUnavailable {
+				listed = append(listed, c)
+			}
+			continue
+		}
+		listed = append(listed, c)
+		downloadable = append(downloadable, c)
+	}
+	chapters := visibleChapters(listed, sources, shown)
 	// Language counts describe the same sources as the visible chapter table.
 	langs = nil
 	counts := map[string]*LangCount{}
 	var sourceCount LangCount
-	for _, c := range visibleChapters(all, sources, nil) {
+	for _, c := range visibleChapters(downloadable, sources, nil) {
 		if counts[c.Lang] == nil {
 			counts[c.Lang] = &LangCount{Code: c.Lang}
 		}
@@ -727,7 +752,8 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": pageQuery(r),
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
-		"FollowCustom": linked && s.db.followChoice(u.ID, m.ID),
+		"FollowCustom":    linked && s.db.followChoice(u.ID, m.ID),
+		"ShowUnavailable": showUnavailable, "Unavailable": unavailable, "Here": strings.TrimSuffix("/manga/"+m.ID+"?"+pageQuery(r), "?"),
 	}})
 }
 
@@ -799,6 +825,10 @@ func (s *Server) chapterDownload(w http.ResponseWriter, r *http.Request) {
 	c, err := s.db.chapter(r.PathValue("id"))
 	if err != nil {
 		s.notFound(w, r)
+		return
+	}
+	if c.Unavailable {
+		back(w, r, "/manga/"+c.MangaID, "This chapter is unavailable on "+sourceLabel(c.Source)+".")
 		return
 	}
 	if c.State != stateDone {
@@ -900,7 +930,7 @@ func (s *Server) downloadsCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) downloadsRetry(w http.ResponseWriter, r *http.Request) {
-	res, _ := s.db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE state=3`, now())
+	res, _ := s.db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE state=3 AND unavailable=0`, now())
 	n, _ := res.RowsAffected()
 	s.dl.Wake()
 	back(w, r, "/downloads", plural(int(n), "chapter")+" added back to downloads.")
@@ -1137,6 +1167,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /manga/{id}/follow/reset", s.web(false, s.followReset))
 	mux.HandleFunc("POST /manga/{id}/delete-files", s.web(true, s.mangaDeleteFiles))
 	mux.HandleFunc("POST /chapter/{id}/download", s.web(false, s.chapterDownload))
+	mux.HandleFunc("GET /chapter/{id}", s.web(true, s.chapterPage))
+	mux.HandleFunc("POST /chapter/{id}/edit", s.web(true, s.chapterEdit))
+	mux.HandleFunc("POST /chapter/{id}/restore", s.web(true, s.chapterRestore))
+	mux.HandleFunc("POST /chapter/{id}/pages", s.web(true, s.chapterPages))
 	mux.HandleFunc("POST /chapter/{id}/primary", s.web(false, s.chapterPrimary))
 	mux.HandleFunc("POST /chapter/{id}/cancel", s.web(false, s.chapterCancel))
 	mux.HandleFunc("POST /chapter/{id}/delete", s.web(true, s.chapterDelete))

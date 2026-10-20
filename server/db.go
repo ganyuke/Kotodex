@@ -145,6 +145,7 @@ func openDB(path string) (*DB, error) {
 		{"source_ref", `TEXT NOT NULL DEFAULT ''`},
 		{"source_url", `TEXT NOT NULL DEFAULT ''`},
 		{"remote_pages", `TEXT NOT NULL DEFAULT '[]'`},
+		{"unavailable", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		var has int
 		db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name=?`, col.name).Scan(&has)
@@ -159,6 +160,14 @@ func openDB(path string) (*DB, error) {
 	if _, err := db.Exec(`UPDATE chapters SET source_ref=coalesce(nullif(source_ref,''),id),
 		source_url=CASE WHEN source_url='' THEN 'https://mangadex.org/chapter/'||coalesce(nullif(source_ref,''),id) ELSE source_url END
 		WHERE source='mangadex' AND (source_ref='' OR source_url='')`); err != nil {
+		return nil, err
+	}
+	// An administrator's edit of a chapter's details. The row keeps what the
+	// source last said, so later checks don't undo the edit and it can be
+	// restored.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chapter_edits(
+		chapter_id TEXT PRIMARY KEY REFERENCES chapters(id) ON DELETE CASCADE,
+		volume TEXT NOT NULL, number TEXT NOT NULL, title TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chapter_feeds(
@@ -417,7 +426,7 @@ func nonNil(s []string) []string {
 func (db *DB) manga(id string, userID int64) (*Manga, error) {
 	row := db.QueryRow(`SELECT `+mangaCols+`,
 		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND c.state=2),
-		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id),
+		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND (c.unavailable=0 OR c.state=2)),
 		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND c.state=1),
 		(SELECT count(*) FROM follows f WHERE f.manga_id=m.id),
 		EXISTS(SELECT 1 FROM follows f WHERE f.manga_id=m.id AND f.user_id=?)
@@ -478,7 +487,7 @@ func (db *DB) library(q LibraryQuery) ([]*Manga, error) {
 	args = append(args, q.Limit, q.Offset)
 	rows, err := db.Query(`SELECT `+mangaCols+`,
 		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND c.state=2),
-		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id),
+		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND (c.unavailable=0 OR c.state=2)),
 		(SELECT count(*) FROM chapters c WHERE c.manga_id=m.id AND c.state=1),
 		(SELECT count(*) FROM follows f WHERE f.manga_id=m.id),
 		EXISTS(SELECT 1 FROM follows f WHERE f.manga_id=m.id AND f.user_id=?1)
@@ -796,16 +805,18 @@ type Chapter struct {
 	SourceURL   string
 	RemotePages []string
 	FeedURL     string // transient binding guard for discovery; not stored on chapters
+	Unavailable bool   // listed by the source, which has no pages to download
+	Edited      bool   // details changed by an administrator (chapter_edits)
 
 	MangaTitle string // filled by queue queries
 }
 
-const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2)`
+const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2),c.unavailable,EXISTS(SELECT 1 FROM chapter_edits e WHERE e.chapter_id=c.id)`
 
 func scanChapter(sc interface{ Scan(...any) error }, extra ...any) (*Chapter, error) {
 	c := &Chapter{}
 	var files, remotePages string
-	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary}, extra...)
+	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary, &c.Unavailable, &c.Edited}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return nil, err
 	}
@@ -922,18 +933,33 @@ func (db *DB) insertChapter(c *Chapter) (bool, error) {
 		}
 	}
 	remote, _ := json.Marshal(nonNil(c.RemotePages))
-	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key)
-		SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (?='' OR EXISTS(
+	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key,unavailable)
+		SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (?='' OR EXISTS(
 			SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?)) ON CONFLICT(id) DO NOTHING`,
-		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued, c.Source, c.SourceRef, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued, c.Source, c.SourceRef, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.Unavailable, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		_, err = db.Exec(`UPDATE chapters SET volume=?,number=?,title=?,grp=?,published=?,pages=CASE WHEN state=2 THEN pages ELSE coalesce(nullif(?,0),pages) END,source_url=?,remote_pages=?,volume_key=?,number_key=? WHERE id=? AND source=? AND manga_id=? AND (?='' OR EXISTS(
-				SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))`,
-			c.Volume, c.Number, c.Title, c.Group, c.Published, c.Pages, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+		// A chapter that was taken down can't be downloaded any more, so it
+		// leaves the queue. Downloaded pages stay.
+		_, err = db.Exec(`UPDATE chapters SET published=?,pages=CASE WHEN state=2 THEN pages ELSE coalesce(nullif(?,0),pages) END,source_url=?,remote_pages=?,
+				unavailable=?,state=CASE WHEN ? AND state IN (1,3) THEN 0 ELSE state END
+				WHERE id=? AND source=? AND manga_id=? AND (?='' OR EXISTS(SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))`,
+			c.Published, c.Pages, c.SourceURL, string(remote), c.Unavailable, c.Unavailable, c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+		// Details an administrator edited stay as edited. The source's
+		// version is kept with the edit instead.
+		if err == nil {
+			_, err = db.Exec(`UPDATE chapters SET volume=?,number=?,title=?,grp=?,volume_key=?,number_key=?
+				WHERE id=? AND source=? AND manga_id=? AND NOT EXISTS(SELECT 1 FROM chapter_edits WHERE chapter_id=chapters.id)
+				AND (?='' OR EXISTS(SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))`,
+				c.Volume, c.Number, c.Title, c.Group, numberKey(c.Volume), numberKey(c.Number), c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+		}
+		if err == nil {
+			_, err = db.Exec(`UPDATE chapter_edits SET volume=?,number=?,title=?,grp=? WHERE chapter_id=?
+				AND EXISTS(SELECT 1 FROM chapters WHERE id=? AND source=? AND manga_id=?)`, c.Volume, c.Number, c.Title, c.Group, c.ID, c.ID, c.Source, c.MangaID)
+		}
 	}
 	if err == nil {
 		err = db.bindReaderChapter(c.ID, false)
@@ -962,6 +988,6 @@ func (db *DB) setChapterState(id string, state int) error {
 // queueChapter puts a chapter at the end of the queue. Chapters queued by one
 // action share its time, so they download together in reading order.
 func (db *DB) queueChapter(id string, at int64) error {
-	_, err := db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE id=?`, at, id)
+	_, err := db.Exec(`UPDATE chapters SET state=1, tries=0, error='', queued=? WHERE id=? AND unavailable=0`, at, id)
 	return err
 }

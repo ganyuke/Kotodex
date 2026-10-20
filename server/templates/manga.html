@@ -49,7 +49,7 @@
       <label>Scanlation group <input name="group" maxlength="500"></label>
       <label>Original source URL <input type="url" name="source_url" maxlength="2000" placeholder="Optional"></label>
     </div>
-    <p><label>Chapter archive (up to 256 MiB) <input type="file" name="archive" accept=".cbz,.zip" required></label></p>
+    <p><label>Chapter archive (CBZ or ZIP, up to 256 MiB) <input type="file" name="archive" accept=".cbz,.zip,application/zip,application/vnd.comicbook+zip" required></label></p>
     <p><label class="check"><input type="checkbox" name="alternate" value="1"> Allow an alternate edition of an already downloaded or queued chapter</label></p>
     <button>Upload chapter</button>
   </form>
@@ -102,6 +102,7 @@
     <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger="submit" hx-target="body" hx-push-url="true">
       <input type="hidden" name="sources" value="1">
       <input type="hidden" name="lang" value="{{$d.Filter}}">
+      {{if $d.ShowUnavailable}}<input type="hidden" name="unavailable" value="1">{{end}}
       <details class="source-filter" id="chapter-source-filter">
         <summary class="button secondary">Sources <span class="muted">{{if eq (len $d.Sources) 1}}{{sourceLabel (index $d.Sources 0)}}{{else}}{{len $d.Sources}} selected{{end}}</span></summary>
         <div class="source-filter-menu">
@@ -127,9 +128,20 @@
       <input type="hidden" name="sources" value="1">
       {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}
       {{range $d.SourceOptions}}<input type="hidden" name="priority" value="{{.Code}}">{{end}}
+      {{if $d.ShowUnavailable}}<input type="hidden" name="unavailable" value="1">{{end}}
       <select id="live-langs" name="lang" aria-label="Language">{{template "live-langs" .}}</select>
       <noscript><button class="small secondary">Show</button></noscript>
     </form>
+    {{if or $d.Unavailable $d.ShowUnavailable}}
+    <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger="submit, change" hx-target="body" hx-push-url="true">
+      <input type="hidden" name="sources" value="1">
+      {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}
+      {{range $d.SourceOptions}}<input type="hidden" name="priority" value="{{.Code}}">{{end}}
+      <input type="hidden" name="lang" value="{{$d.Filter}}">
+      <label class="check"><input type="checkbox" name="unavailable" value="1"{{if $d.ShowUnavailable}} checked{{end}}> Show {{plural $d.Unavailable "unavailable chapter"}} (<abbr title="Chapters taken down from MangaDex, with no pages to download.{{if $admin}} Add their pages from the chapter's row.{{end}}">?</abbr>)</label>
+      <noscript><button class="small secondary">Show</button></noscript>
+    </form>
+    {{end}}
     <form method="post" action="/manga/{{$m.ID}}/download-all">
       <input type="hidden" name="sources" value="1">
       {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}
@@ -170,7 +182,7 @@
   <thead><tr><th>Chapter</th>{{range $d.Columns}}<th data-col="{{.Name}}" draggable="true"{{if eq .Name "pages"}} class="num"{{end}}>{{.Label}}</th>{{end}}<th></th></tr></thead>
   <tbody>
   {{range $c := $d.Chapters}}
-  <tr id="c-{{.ID}}" class="state{{.State}}">
+  <tr id="c-{{.ID}}" class="state{{.State}}{{if and .Unavailable (ne .State 2)}} unavailable{{end}}">
     <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
     {{range $d.Columns}}
     {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
@@ -185,6 +197,7 @@
       {{else if eq $c.State 2}}<span title="{{date $c.Downloaded}}">Downloaded</span>
       {{else if eq $c.State 1}}<span class="pill">Queued</span>
       {{else if eq $c.State 3}}<span class="pill bad" title="{{$c.Error}}">Failed</span>
+      {{else if $c.Unavailable}}<span class="muted" title="Taken down from {{sourceLabel $c.Source}}">Unavailable</span>
       {{else}}<span class="muted">Not downloaded</span>{{end}}
     </td>{{end}}
     {{end}}
@@ -192,7 +205,9 @@
       {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Set primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Delete</button></form>{{end}}
       {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Cancel</button></form>
       {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Retry</button></form>
+      {{else if .Unavailable}}{{if $admin}}<a class="small" href="/chapter/{{.ID}}?next={{$d.Here}}">Add pages</a>{{end}}
       {{else}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Download</button></form>{{end}}
+      {{if and $admin (not (and .Unavailable (ne .State 2)))}}<a class="small" href="/chapter/{{.ID}}?next={{$d.Here}}">Edit</a>{{end}}
     </td>
   </tr>
   {{end}}

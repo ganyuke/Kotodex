@@ -18,6 +18,91 @@ document.addEventListener("htmx:sse:close", (e) => {
   if (e.detail.reason === "message") location.reload();
 });
 
+// The file dialog can still be switched to all files. Refuse the wrong type
+// before the form is submitted.
+document.addEventListener("change", (e) => {
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement) || input.type !== "file" || input.name !== "archive") return;
+  const file = input.files?.[0];
+  input.setCustomValidity(file && !/\.(cbz|zip)$/i.test(file.name) ? "Choose a CBZ or ZIP file." : "");
+});
+
+// Page uploads: files or a folder, whichever was chosen last, sent with a
+// progress bar. The server answers with where to go next.
+document.addEventListener("change", (e) => {
+  const input = e.target;
+  const form = input.closest?.("form[data-upload]");
+  if (!form || input.type !== "file") return;
+  form.querySelectorAll("input[type=file]").forEach((other) => {
+    if (other !== input) other.value = "";
+  });
+  const n = input.files.length;
+  form.querySelector("[data-upload-chosen]").textContent =
+    n === 0 ? "No pages chosen" : n === 1 ? input.files[0].name : `${n} files chosen`;
+});
+
+let uploading = false;
+window.addEventListener("beforeunload", (e) => {
+  if (uploading) e.preventDefault();
+});
+
+document.addEventListener("submit", (e) => {
+  const form = e.target.closest?.("form[data-upload]");
+  if (!form) return;
+  e.preventDefault();
+  if (uploading) return;
+  const bar = form.querySelector("progress");
+  const status = form.querySelector("[data-upload-status]");
+  const button = form.querySelector("button");
+  const show = (text, error) => {
+    status.hidden = false;
+    status.className = error ? "error" : "muted";
+    status.textContent = text;
+  };
+  if (![...form.querySelectorAll("input[type=file]")].some((i) => i.files.length)) {
+    show("Choose the pages first.", true);
+    return;
+  }
+  const done = (text) => {
+    uploading = false;
+    button.disabled = false;
+    bar.hidden = true;
+    show(text, true);
+  };
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", form.action);
+  xhr.setRequestHeader("Kotodex-Upload", "1");
+  xhr.upload.addEventListener("progress", (p) => {
+    if (!p.lengthComputable) return;
+    bar.max = p.total;
+    bar.value = p.loaded;
+    show(`Uploading, ${Math.floor((p.loaded * 100) / p.total)}% done`);
+  });
+  xhr.upload.addEventListener("load", () => show("Saving pages"));
+  xhr.addEventListener("load", () => {
+    const next = xhr.getResponseHeader("Kotodex-Location");
+    if (xhr.status === 204 && next) {
+      uploading = false;
+      location.assign(next);
+      return;
+    }
+    // A reverse proxy's size limit answers with its own page.
+    if (xhr.status === 413) {
+      done("The upload is over the server's size limit.");
+      return;
+    }
+    const page = new DOMParser().parseFromString(xhr.responseText, "text/html");
+    done(page.querySelector("main h1")?.textContent || "Upload failed.");
+  });
+  xhr.addEventListener("error", () => done("Upload failed. Check the connection and try again."));
+  uploading = true;
+  button.disabled = true;
+  bar.hidden = false;
+  bar.value = 0;
+  show("Uploading, 0% done");
+  xhr.send(new FormData(form));
+});
+
 // Chapter table columns: hide, show, and reorder. Saved in a cookie, so the
 // server draws the table the same way, live updates included.
 const colsCookie = "chapter_columns";

@@ -227,7 +227,7 @@ func (d *Downloader) checkManga(ctx context.Context, m *Manga) {
 	for i := len(feed) - 1; i >= 0; i-- {
 		c := feed[i]
 		c.State = stateSkipped
-		eligible := !initial && wanted[c.Lang] && c.Published >= checked-24*3600
+		eligible := !initial && !c.Unavailable && wanted[c.Lang] && c.Published >= checked-24*3600
 		inserted, err := d.db.insertChapter(c)
 		if err != nil {
 			log.Printf("save chapter %s: %v", c.ID, err)

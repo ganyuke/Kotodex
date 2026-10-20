@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -26,6 +27,7 @@ type Server struct {
 	covers   *Covers
 	limiter  *loginLimiter
 	pages    map[string]*template.Template
+	pagesMu  sync.Mutex    // held while uploaded pages move into a chapter's folder
 	closing  chan struct{} // closed when the server shuts down
 }
 
