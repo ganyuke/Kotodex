@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "1.6.0"
+const version = "1.6.1"
 
 type Server struct {
 	db       *DB

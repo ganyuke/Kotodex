@@ -1,0 +1,5 @@
+MangaFire chapters follow matching MangaDex volume groupings without changing reading progress.
+Chapters with unknown volumes stay in sequence when numbering is continuous.
+Older MangaDex chapters now have source links.
+The primary-copy action fits in its column.
+Activity titles have more room and the sidebar stacks before the feed gets cramped.
