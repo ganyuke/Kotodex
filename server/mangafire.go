@@ -145,6 +145,7 @@ func (s *mangaFireSource) Chapters(ctx context.Context, ref string, _ bool) ([]*
 				Number    json.Number `json:"number"`
 				Name      string      `json:"name"`
 				Language  string      `json:"language"`
+				Type      string      `json:"type"`
 				CreatedAt int64       `json:"createdAt"`
 			} `json:"items"`
 			Meta struct {
@@ -162,13 +163,23 @@ func (s *mangaFireSource) Chapters(ctx context.Context, ref string, _ bool) ([]*
 			}
 			seen[id] = true
 			chapters = append(chapters, &Chapter{Source: "mangafire", SourceRef: id, SourceURL: mangaFireOrigin + "/title/" + hid + "/chapter/" + id,
-				Number: normalizeChapterNumber(item.Number.String()), Title: truncate(item.Name, 500), Lang: item.Language, Published: item.CreatedAt})
+				Number: normalizeChapterNumber(item.Number.String()), Title: truncate(item.Name, 500), Lang: item.Language,
+				Group: mangaFireGroup(item.Type), Published: item.CreatedAt})
 		}
 		if response.Meta.LastPage <= page {
 			return chapters, nil
 		}
 	}
 	return nil, errors.New("MangaFire chapter list exceeds 100 pages")
+}
+
+// MangaFire labels publisher chapters "official" and the rest "unofficial".
+// The group column is where the chapter table shows that split.
+func mangaFireGroup(kind string) string {
+	if kind == "official" {
+		return "Official"
+	}
+	return ""
 }
 
 func (s *mangaFireSource) Pages(ctx context.Context, c *Chapter, _ bool) ([]SourcePage, error) {

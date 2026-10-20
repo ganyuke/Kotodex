@@ -164,7 +164,8 @@
 {{define "live-chapters"}}
 {{$d := .Data}}{{$m := $d.Manga}}{{$admin := .User.Admin}}
 {{if $d.Chapters}}
-<table class="list compact fixed chapters">
+{{/* Boosted posts scroll to the top of the page. Stay with the row instead. */}}
+<table class="list compact fixed chapters" hx-swap:inherited="innerHTML show:none">
   <colgroup><col class="c-chapter">{{range $d.Columns}}<col class="c-{{.Name}}">{{end}}<col class="c-actions"></colgroup>
   <thead><tr><th>Chapter</th>{{range $d.Columns}}<th data-col="{{.Name}}" draggable="true"{{if eq .Name "pages"}} class="num"{{end}}>{{.Label}}</th>{{end}}<th></th></tr></thead>
   <tbody>
@@ -175,7 +176,7 @@
     {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
     {{else if eq .Name "lang"}}<td title="{{lang $c.Lang}}">{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
     {{else if eq .Name "source"}}<td title="{{sourceLabel $c.Source}}">{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}</td>
-    {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{$c.Group}}</td>
+    {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{if eq $c.Group "Official"}}<span class="pill" title="Official release">Official</span>{{else}}{{$c.Group}}{{end}}</td>
     {{else if eq .Name "date"}}<td>{{date $c.Published}}</td>
     {{else if eq .Name "pages"}}<td class="num">{{$c.Pages}}</td>
     {{else if eq .Name "you"}}<td title="{{with index $d.Reading.Chapters $c.ID}}{{.}}{{end}}">{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
@@ -188,10 +189,10 @@
     </td>{{end}}
     {{end}}
     <td class="actions">
-      {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Set primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
-      {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><button class="small link">Cancel</button></form>
-      {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Retry</button></form>
-      {{else}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Download</button></form>{{end}}
+      {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Set primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Delete</button></form>{{end}}
+      {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Cancel</button></form>
+      {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Retry</button></form>
+      {{else}}<form method="post" action="/chapter/{{.ID}}/download"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Download</button></form>{{end}}
     </td>
   </tr>
   {{end}}

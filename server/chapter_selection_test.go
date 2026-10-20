@@ -60,6 +60,12 @@ func TestChapterSourceFilterAndDownloadSelection(t *testing.T) {
 			if !strings.Contains(body, `name="sources" value="1"`) {
 				t.Fatal("empty source selection cannot be submitted")
 			}
+			if strings.Contains(body, `class="list compact fixed chapters"`) && !strings.Contains(body, `hx-swap:inherited="innerHTML show:none"`) {
+				t.Fatal("chapter actions must stay at the row instead of scrolling to the top")
+			}
+			if strings.Contains(body, `action="/chapter/new-mf/download"`) && !strings.Contains(body, `name="next" value="/manga/`+mangaA) {
+				t.Fatal("chapter actions must return to this manga page")
+			}
 			values.Set("lang", "en")
 			req = httptest.NewRequest("POST", "/manga/"+mangaA+"/download-all", strings.NewReader(values.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

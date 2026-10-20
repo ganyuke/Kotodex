@@ -304,16 +304,16 @@ func TestMangaFireUpstreamSigningAndPagination(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/titles/72xyj/chapters":
 			if r.URL.Query().Get("page") == "1" {
-				return sourceResponse([]byte(`{"items":[{"id":5037948,"number":90,"name":"Always, on the Veranda","language":"en","createdAt":1758933029}],"meta":{"lastPage":2}}`)), nil
+				return sourceResponse([]byte(`{"items":[{"id":5037948,"number":90,"name":"Always, on the Veranda","language":"en","type":"unofficial","createdAt":1758933029}],"meta":{"lastPage":2}}`)), nil
 			}
-			return sourceResponse([]byte(`{"items":[{"id":6345098,"number":90.5,"name":"French chapter","language":"fr","createdAt":1767303629}],"meta":{"lastPage":2}}`)), nil
+			return sourceResponse([]byte(`{"items":[{"id":6345098,"number":90.5,"name":"French chapter","language":"fr","type":"official","createdAt":1767303629}],"meta":{"lastPage":2}}`)), nil
 		case "/api/chapters/5037948":
 			return sourceResponse([]byte(`{"data":{"pages":[{"url":"https://images.example/one.png"},{"url":"https://images.example/two"}]}}`)), nil
 		}
 		return nil, errors.New("unexpected endpoint")
 	})}
 	chapters, err := src.Chapters(context.Background(), mangaFireOrigin+"/title/72xyj-kyou-mo-veranda-dee", true)
-	if err != nil || len(chapters) != 2 || calls != 2 || chapters[1].Number != "90.5" {
+	if err != nil || len(chapters) != 2 || calls != 2 || chapters[1].Number != "90.5" || chapters[0].Group != "" || chapters[1].Group != "Official" {
 		t.Fatalf("chapters: %+v %v calls=%d", chapters, err, calls)
 	}
 	pages, err := src.Pages(context.Background(), chapters[0], false)
