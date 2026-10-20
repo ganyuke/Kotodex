@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -186,6 +185,7 @@ func allLangs() []langOption {
 func (s *Server) loadTemplates() {
 	funcs := template.FuncMap{
 		"chapterLabel": chapterLabel,
+		"sourceLabel":  sourceLabel,
 		"lang": func(code string) string {
 			if n, ok := langNames[code]; ok {
 				return n
@@ -645,11 +645,50 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	default:
 		shown = []string{filter}
 	}
-	var chapters []*Chapter
-	for _, c := range all {
-		if shown == nil || slices.Contains(shown, c.Lang) {
-			chapters = append(chapters, c)
+	sources := selectedChapterSources(r.URL.Query())
+	priority := chapterSourcePriority(r.URL.Query())
+	selectedSources := map[string]bool{}
+	available := map[string]bool{"mangadex": true}
+	for source := range s.dl.sources {
+		if source == "json" {
+			continue
 		}
+		available[source] = true
+	}
+	for _, c := range all {
+		available[c.Source] = true
+	}
+	var sourceOptions []sourceOption
+	for source := range available {
+		sourceOptions = append(sourceOptions, sourceOption{source, sourceLabel(source)})
+	}
+	slices.SortFunc(sourceOptions, func(a, b sourceOption) int {
+		if n := sourceRank(a.Code, priority) - sourceRank(b.Code, priority); n != 0 {
+			return n
+		}
+		return strings.Compare(a.Code, b.Code)
+	})
+	for _, source := range sources {
+		selectedSources[source] = true
+	}
+	chapters := visibleChapters(all, sources, shown)
+	// Language counts describe the same sources as the visible chapter table.
+	langs = nil
+	counts := map[string]*LangCount{}
+	var sourceCount LangCount
+	for _, c := range visibleChapters(all, sources, nil) {
+		if counts[c.Lang] == nil {
+			counts[c.Lang] = &LangCount{Code: c.Lang}
+		}
+		counts[c.Lang].Chapters++
+		sourceCount.Chapters++
+		if c.State == stateDone {
+			counts[c.Lang].Downloaded++
+			sourceCount.Downloaded++
+		}
+	}
+	for _, code := range slices.Sorted(maps.Keys(counts)) {
+		langs = append(langs, *counts[code])
 	}
 	// The list offers every language with chapters, plus yours and the
 	// picked one so they show as picked even without chapters.
@@ -680,10 +719,11 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		current = st.Current
 	}
 	reading := s.mangaReading(u, m, all)
+	feeds, _ := s.db.chapterFeeds(m.ID)
 	allCols, cols := chapterColumns(r)
 	s.render(w, r, "manga", pageData{Title: m.Title, Nav: "library", Data: map[string]any{
 		"Manga": m, "Chapters": chapters, "Cover": cover, "Size": size, "Current": current, "Reading": reading,
-		"AllColumns": allCols, "Columns": cols,
+		"AllColumns": allCols, "Columns": cols, "ChapterFeeds": feeds, "UploadLangs": allLangs(), "SourceOptions": sourceOptions, "SelectedSources": selectedSources, "Sources": sources, "SourceCount": sourceCount, "LinkSources": s.dl.linkedSources(),
 		"Langs": langs, "LangChoices": langChoices, "FollowLangs": followLangs, "Filter": filter,
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": pageQuery(r),
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
@@ -697,31 +737,21 @@ func (s *Server) mangaCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mangaDownloadAll(w http.ResponseWriter, r *http.Request) {
-	// One upload per chapter number and language, the earliest one, same as
-	// for new chapters. Other groups' uploads can still be picked by hand.
-	// No languages means all of them.
 	id := r.PathValue("id")
-	r.ParseForm()
-	langs := r.PostForm["lang"]
-	var chapters []*Chapter
-	var err error
-	if len(langs) == 0 {
-		chapters, err = s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) ORDER BY c.published`, id)
-	} else {
-		list, _ := json.Marshal(langs)
-		chapters, err = s.db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? AND c.state IN (0,3) AND c.lang IN (SELECT value FROM json_each(?)) ORDER BY c.published`, id, string(list))
+	if err := r.ParseForm(); err != nil {
+		s.errorPage(w, r, http.StatusBadRequest, "Invalid chapter selection.")
+		return
 	}
+	all, err := s.db.chapters(id)
 	if err != nil {
 		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
 		return
 	}
-	n, at := 0, now()
-	for _, c := range chapters {
-		if s.db.hasChapterNumber(c.MangaID, c.Lang, c.Volume, c.Number) {
-			continue
-		}
-		s.db.queueChapter(c.ID, at)
-		n++
+	chapters := visibleChapters(all, selectedChapterSources(r.PostForm), r.PostForm["lang"])
+	n, err := s.db.queueMissingChapters(chapters, chapterSourcePriority(r.PostForm))
+	if err != nil {
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+		return
 	}
 	s.dl.Wake()
 	back(w, r, "/manga/"+id, plural(n, "chapter")+" added to downloads.")
@@ -775,6 +805,20 @@ func (s *Server) chapterDownload(w http.ResponseWriter, r *http.Request) {
 		s.db.queueChapter(c.ID, now())
 		s.dl.Wake()
 	}
+	back(w, r, "/manga/"+c.MangaID, "")
+}
+
+func (s *Server) chapterPrimary(w http.ResponseWriter, r *http.Request) {
+	c, err := s.db.chapter(r.PathValue("id"))
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	if err := s.db.setPrimaryChapter(c.ID); err != nil {
+		s.errorPage(w, r, http.StatusBadRequest, userMessage(err))
+		return
+	}
+	s.dl.Changed()
 	back(w, r, "/manga/"+c.MangaID, "")
 }
 
@@ -1084,6 +1128,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /follow", s.web(false, s.followAction))
 	mux.HandleFunc("POST /unfollow", s.web(false, s.unfollowAction))
 	mux.HandleFunc("GET /manga/{id}", s.web(false, s.live(s.mangaPage, s.downloadingManga)))
+	mux.HandleFunc("POST /manga/{id}/upload", s.web(true, s.mangaUpload))
+	mux.HandleFunc("POST /manga/{id}/feeds", s.web(false, s.mangaFeed))
 	mux.HandleFunc("POST /manga/{id}/check", s.web(false, s.mangaCheck))
 	mux.HandleFunc("POST /manga/{id}/download-all", s.web(false, s.mangaDownloadAll))
 	mux.HandleFunc("POST /manga/{id}/languages", s.web(false, s.mangaLanguages))
@@ -1091,6 +1137,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /manga/{id}/follow/reset", s.web(false, s.followReset))
 	mux.HandleFunc("POST /manga/{id}/delete-files", s.web(true, s.mangaDeleteFiles))
 	mux.HandleFunc("POST /chapter/{id}/download", s.web(false, s.chapterDownload))
+	mux.HandleFunc("POST /chapter/{id}/primary", s.web(false, s.chapterPrimary))
 	mux.HandleFunc("POST /chapter/{id}/cancel", s.web(false, s.chapterCancel))
 	mux.HandleFunc("POST /chapter/{id}/delete", s.web(true, s.chapterDelete))
 	mux.HandleFunc("GET /activity", s.web(false, s.live(s.activityPage, nil)))

@@ -1115,7 +1115,7 @@ func TestLivePageStillPlain(t *testing.T) {
 	}
 	b, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), `<div id="live-chapters">`) || !strings.Contains(string(b), `hx-sse:connect="/manga/`+mangaA+`?live=1"`) {
+	if !strings.Contains(string(b), "<html") || !strings.Contains(string(b), `<div id="live-chapters"`) || !strings.Contains(string(b), `hx-sse:connect="/manga/`+mangaA+`?live=1"`) {
 		t.Fatal("manga page should be a full page with its live section")
 	}
 }
@@ -1872,7 +1872,7 @@ func TestLangFlag(t *testing.T) {
 func TestChapterColumns(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	all, shown := chapterColumns(r)
-	if len(all) != 7 || len(shown) != 7 || all[0].Name != "title" {
+	if len(all) != 8 || len(shown) != 8 || all[0].Name != "title" {
 		t.Fatalf("defaults: %v", all)
 	}
 	// Order and hidden ones from the cookie, made-up and repeated names
@@ -1883,7 +1883,7 @@ func TestChapterColumns(t *testing.T) {
 	for _, c := range shown {
 		names = append(names, c.Name)
 	}
-	if got := strings.Join(names, ","); got != "status,lang,title,date,pages,you" || len(all) != 7 {
+	if got := strings.Join(names, ","); got != "status,lang,title,date,pages,you,source" || len(all) != 8 {
 		t.Errorf("shown = %s, all = %d", got, len(all))
 	}
 }

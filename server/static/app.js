@@ -93,3 +93,34 @@ htmx.onLoad((el) => {
     }
   } catch {}
 });
+
+// Dismiss the source menu without changing the applied chapter selection.
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector(".source-filter[open]");
+  if (menu && !menu.contains(event.target)) menu.open = false;
+});
+document.addEventListener("keydown", (event) => {
+  const menu = document.querySelector(".source-filter[open]");
+  if (event.key === "Escape" && menu) {
+    menu.open = false;
+    menu.querySelector("summary").focus();
+  }
+});
+
+// Reordering changes every source's priority, independently of its checkbox.
+document.addEventListener("click", (event) => {
+  const move = event.target.closest("[data-source-move]");
+  if (!move) return;
+  const row = move.closest("[data-source-row]");
+  const up = move.dataset.sourceMove === "-1";
+  const adjacent = up ? row.previousElementSibling : row.nextElementSibling;
+  if (!adjacent) return;
+  up ? adjacent.before(row) : adjacent.after(row);
+  const rows = [...row.parentElement.children];
+  rows.forEach((item, index) => {
+    item.querySelector(".source-rank").textContent = index + 1;
+    item.querySelector('[data-source-move="-1"]').disabled = index === 0;
+    item.querySelector('[data-source-move="1"]').disabled = index === rows.length - 1;
+  });
+  if (move.disabled) row.querySelector(`[data-source-move="${up ? 1 : -1}"]`).focus();
+});

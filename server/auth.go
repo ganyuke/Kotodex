@@ -292,7 +292,7 @@ func truncate(s string, n int) string {
 // deletes its session, which revokes every link it was given. Changing the
 // password deletes all of the user's sessions.
 
-var filePathRe = regexp.MustCompile(`^([0-9a-f-]{36}/(cover\.[a-z]+|thumb\.jpg|[0-9a-f-]{36}/[0-9]{3,4}\.(jpg|jpeg|png|gif|webp))|other/[0-9a-f]{64}\.(jpg|png|gif|webp))$`)
+var filePathRe = regexp.MustCompile(`^([0-9a-f-]{36}/(cover\.[a-z]+|thumb\.jpg|[0-9a-f-]{36}/[0-9]{3,4}\.(jpg|jpeg|png|gif|webp|img))|other/[0-9a-f]{64}\.(jpg|png|gif|webp))$`)
 
 func (s *Server) sign(sid, path string) string {
 	mac := hmac.New(sha256.New, s.keys.sign)

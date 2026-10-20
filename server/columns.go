@@ -18,7 +18,7 @@ type chapterCol struct {
 var columnChoices = []chapterCol{
 	{Name: "title", Label: "Title"}, {Name: "lang", Label: "Language"}, {Name: "group", Label: "Group"},
 	{Name: "date", Label: "Published"}, {Name: "pages", Label: "Pages"}, {Name: "you", Label: "You"},
-	{Name: "status", Label: "Status"},
+	{Name: "status", Label: "Status"}, {Name: "source", Label: "Source"},
 }
 
 // colsCookie holds names in order, hidden ones marked with "-", joined with

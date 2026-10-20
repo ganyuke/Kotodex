@@ -15,10 +15,11 @@ import (
 )
 
 type Downloader struct {
-	db   *DB
-	mdx  *MangaDex
-	keys *Keys
-	dir  string
+	db      *DB
+	mdx     *MangaDex
+	sources map[string]ChapterSource
+	keys    *Keys
+	dir     string
 
 	wake    chan struct{}
 	check   chan string // manga ID, or "" for everything
@@ -54,7 +55,7 @@ type Status struct {
 }
 
 func newDownloader(db *DB, mdx *MangaDex, keys *Keys, dir string) *Downloader {
-	return &Downloader{db: db, mdx: mdx, keys: keys, dir: dir, wake: make(chan struct{}, 1), check: make(chan string, 64), resched: make(chan struct{}, 1)}
+	return &Downloader{db: db, mdx: mdx, sources: map[string]ChapterSource{"mangadex": mangaDexSource{mdx}, "json": &jsonSource{client: coverClient()}, "mangafire": newMangaFireSource()}, keys: keys, dir: dir, wake: make(chan struct{}, 1), check: make(chan string, 64), resched: make(chan struct{}, 1)}
 }
 
 // Changed tells open pages to update.
@@ -185,6 +186,19 @@ func (d *Downloader) checkAll(ctx context.Context) {
 // that are new to the database but were published well before the last
 // check are recorded as skipped too.
 func (d *Downloader) checkManga(ctx context.Context, m *Manga) {
+	// Alternate sources remain usable even if MangaDex is unavailable.
+	var candidates []*Chapter
+	defer func() {
+		candidates = append(candidates, d.checkFeeds(ctx, m)...)
+		queued, err := d.db.queueMissingChapters(candidates, nil)
+		if err != nil {
+			log.Printf("queue chapters for %s: %v", m.Title, err)
+		}
+		if queued > 0 {
+			log.Printf("%s: %d new chapter(s)", m.Title, queued)
+		}
+		d.Wake()
+	}()
 	// Once a day, refresh the metadata and fetch the full chapter list, which
 	// picks up older uploads the quick check (newest 100) can't see.
 	daily := time.Since(time.Unix(m.Refreshed, 0)) > 24*time.Hour
@@ -202,39 +216,28 @@ func (d *Downloader) checkManga(ctx context.Context, m *Manga) {
 	var checked int64
 	d.db.QueryRow(`SELECT checked FROM manga WHERE id=?`, m.ID).Scan(&checked)
 	initial := checked == 0
-	feed, err := d.mdx.feed(ctx, m.ID, nil, initial || daily)
+	feed, err := d.sources["mangadex"].Chapters(ctx, m.ID, initial || daily)
 	if err != nil {
 		log.Printf("check %s: %v", m.Title, err)
 		return
 	}
 	wanted := d.db.wantedLangs(m.ID)
 
-	// Oldest first, so duplicate detection keeps the first upload.
-	queued, at := 0, now()
+	// Record each source before choosing which new releases to queue.
 	for i := len(feed) - 1; i >= 0; i-- {
-		if !feed[i].readable() {
-			continue
-		}
-		c := feed[i].toChapter(m.ID)
+		c := feed[i]
 		c.State = stateSkipped
-		if !initial && wanted[c.Lang] && c.Published >= checked-24*3600 && !d.db.hasChapterNumber(m.ID, c.Lang, c.Volume, c.Number) {
-			c.State = stateQueued
-			c.Queued = at
-		}
+		eligible := !initial && wanted[c.Lang] && c.Published >= checked-24*3600
 		inserted, err := d.db.insertChapter(c)
 		if err != nil {
 			log.Printf("save chapter %s: %v", c.ID, err)
 			continue
 		}
-		if inserted && c.State == stateQueued {
-			queued++
+		if inserted && eligible {
+			candidates = append(candidates, c)
 		}
 	}
 	d.db.Exec(`UPDATE manga SET checked=? WHERE id=?`, now(), m.ID)
-	if queued > 0 {
-		log.Printf("%s: %d new chapter(s)", m.Title, queued)
-		d.Wake()
-	}
 }
 
 func coverPath(m *Manga) string {
@@ -271,6 +274,10 @@ func (d *Downloader) ensureCover(ctx context.Context, m *Manga) error {
 }
 
 func (d *Downloader) download(ctx context.Context, url, dest string) error {
+	return d.downloadFrom(ctx, d.sources["mangadex"], url, dest)
+}
+
+func (d *Downloader) downloadFrom(ctx context.Context, source ChapterSource, url, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -279,7 +286,7 @@ func (d *Downloader) download(ctx context.Context, url, dest string) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.mdx.fetch(ctx, url, f)
+	_, err = source.Fetch(ctx, url, f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -335,16 +342,19 @@ func (d *Downloader) worker(ctx context.Context) {
 }
 
 func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
-	ah, err := d.mdx.atHome(ctx, c.ID)
+	source := d.sources[c.Source]
+	if c.Source == "" {
+		source = d.sources["mangadex"]
+	}
+	if source == nil {
+		return fmt.Errorf("unknown chapter source %q", c.Source)
+	}
+	files, err := source.Pages(ctx, c, d.db.settings().DataSaver)
 	if err != nil {
 		return err
 	}
-	files, kind := ah.Chapter.Data, "data"
-	if d.db.settings().DataSaver && len(ah.Chapter.DataSaver) > 0 {
-		files, kind = ah.Chapter.DataSaver, "data-saver"
-	}
 	if len(files) == 0 {
-		return errors.New("MangaDex returned no pages")
+		return errors.New("source returned no pages")
 	}
 	dir := filepath.Join(d.dir, c.MangaID, c.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -352,8 +362,8 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 	}
 	names := make([]string, len(files))
 	for i, f := range files {
-		ext := strings.ToLower(path.Ext(f))
-		if ext == "" {
+		ext := strings.ToLower(f.Extension)
+		if ext != ".img" && !imageExtension(ext) {
 			ext = ".jpg"
 		}
 		names[i] = fmt.Sprintf("%03d%s", i+1, ext)
@@ -378,7 +388,7 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 		go func(url, dest string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := d.download(ctx, url, dest); err != nil {
+			if err := d.downloadFrom(ctx, source, url, dest); err != nil {
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -389,7 +399,7 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 			if st, err := os.Stat(dest); err == nil {
 				d.progress(func(p *Progress) { p.Done++; p.Bytes += st.Size() })
 			}
-		}(fmt.Sprintf("%s/%s/%s/%s", ah.BaseURL, kind, ah.Chapter.Hash, f), dest)
+		}(f.URL, dest)
 	}
 	wg.Wait()
 	if firstErr != nil {
@@ -415,6 +425,9 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 		// Canceled or deleted while downloading. Don't keep the pages.
 		return os.RemoveAll(dir)
 	}
+	if err := d.db.repairChapterPrimaries(c.MangaID); err != nil {
+		return err
+	}
 	_, err = d.db.Exec(`UPDATE manga SET latest=? WHERE id=?`, now(), c.MangaID)
 	return err
 }
@@ -422,6 +435,12 @@ func (d *Downloader) downloadChapter(ctx context.Context, c *Chapter) error {
 // deleteChapterFiles removes a chapter's pages and marks it skipped.
 func (d *Downloader) deleteChapterFiles(c *Chapter) error {
 	if err := os.RemoveAll(filepath.Join(d.dir, c.MangaID, c.ID)); err != nil {
+		return err
+	}
+	// Uploaded files have no remote copy to retry; remove their catalog row.
+	if c.Source == "upload" {
+		_, err := d.db.Exec(`DELETE FROM chapters WHERE id=? AND source='upload'`, c.ID)
+		d.Changed()
 		return err
 	}
 	_, err := d.db.Exec(`UPDATE chapters SET state=0, files='[]', size=0, downloaded=0, tries=0, error='' WHERE id=?`, c.ID)

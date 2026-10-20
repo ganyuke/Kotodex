@@ -134,17 +134,15 @@ class MangaProvider : ContentProvider() {
         )
     }
 
-    /**
-     * Chapters are grouped into branches by language, like Kotatsu's own
-     * MangaDex source. A second upload of the same chapter by another group
-     * goes to "English (1)" and so on, so each branch reads straight through.
-     */
+    // The server exposes one primary copy per persistent reader identity.
+    // Keep the older branching and ID conversion only for older servers.
     private fun chapters(m: JSONObject): Cursor {
         val list = m.optJSONArray("chapterList") ?: JSONArray()
         val cursor = MatrixCursor(CHAPTER_COLUMNS)
         val taken = HashMap<String, HashSet<Pair<Int, Float>>>()
         for (i in 0 until list.length()) {
             val c = list.getJSONObject(i)
+            val hasReaderId = !c.isNull("readerId")
             val numbered = !c.isNull("number")
             val number = c.optDouble("number", 0.0).toFloat()
             val volume = c.optInt("volume", 0)
@@ -152,7 +150,7 @@ class MangaProvider : ContentProvider() {
             val lang = locale.getDisplayName(locale).replaceFirstChar { it.titlecase(locale) }
             val key = volume to number
             // Chapters without a number can't be the same chapter twice.
-            val branch = if (!numbered) {
+            val branch = if (hasReaderId || !numbered) {
                 lang
             } else {
                 generateSequence(0) { it + 1 }
@@ -161,13 +159,15 @@ class MangaProvider : ContentProvider() {
                     .also { taken.getOrPut(it, ::HashSet).add(key) }
             }
             val chapterId = c.getString("id")
+            val readerId = if (hasReaderId) c.getLong("readerId") else stableId("chapter:$chapterId")
+            val pagesRef = if (hasReaderId) "reader:$readerId" else chapterId
             cursor.addRow(
                 arrayOf<Any?>(
-                    stableId("chapter:$chapterId"),
+                    readerId,
                     c.optString("title").ifEmpty { null },
                     number,
                     volume,
-                    chapterId,
+                    pagesRef,
                     c.optString("group").ifEmpty { null },
                     c.optLong("published", 0L),
                     branch,

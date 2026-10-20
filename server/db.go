@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -112,7 +113,8 @@ CREATE TABLE IF NOT EXISTS mdx_accounts(
 
 type DB struct {
 	*sql.DB
-	signedOut changes // sessions or users were removed, so live streams re-check theirs
+	readerMu  sync.Mutex // serializes allocation and binding of persistent reader identities
+	signedOut changes    // sessions or users were removed, so live streams re-check theirs
 }
 
 func openDB(path string) (*DB, error) {
@@ -135,6 +137,64 @@ func openDB(path string) (*DB, error) {
 			return nil, fmt.Errorf("add chapters.queued: %w", err)
 		}
 		db.Exec(`UPDATE chapters SET queued=published WHERE state IN (1,3)`)
+	}
+	// Existing chapters belong to MangaDex. Source identities remain separate
+	// from the canonical manga ID used by the reader and reading history.
+	for _, col := range []struct{ name, def string }{
+		{"source", `TEXT NOT NULL DEFAULT 'mangadex'`},
+		{"source_ref", `TEXT NOT NULL DEFAULT ''`},
+		{"source_url", `TEXT NOT NULL DEFAULT ''`},
+		{"remote_pages", `TEXT NOT NULL DEFAULT '[]'`},
+	} {
+		var has int
+		db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name=?`, col.name).Scan(&has)
+		if has == 0 {
+			if _, err := db.Exec(`ALTER TABLE chapters ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+				return nil, fmt.Errorf("add chapters.%s: %w", col.name, err)
+			}
+		}
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chapter_feeds(
+		manga_id TEXT NOT NULL REFERENCES manga(id), url TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'json',
+		checked INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY(manga_id,url))`); err != nil {
+		return nil, err
+	}
+	// Identity keys make deduplication atomic across download requests and
+	// scheduled checks, without comparing decimal numbers as floating point.
+	var chapterKeysAdded bool
+	for _, name := range []string{"number_key", "volume_key"} {
+		var has int
+		db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapters') WHERE name=?`, name).Scan(&has)
+		if has == 0 {
+			if _, err := db.Exec(`ALTER TABLE chapters ADD COLUMN ` + name + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return nil, err
+			}
+			chapterKeysAdded = true
+		}
+	}
+	var chapterKeyVersion string
+	db.QueryRow(`SELECT value FROM settings WHERE key='chapter_identity_version'`).Scan(&chapterKeyVersion)
+	if chapterKeysAdded || chapterKeyVersion != "1" {
+		if err := backfillChapterKeys(&DB{DB: db}); err != nil {
+			return nil, err
+		}
+		if _, err := db.Exec(`INSERT INTO settings(key,value) VALUES('chapter_identity_version','1') ON CONFLICT(key) DO UPDATE SET value='1'`); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS chapters_identity ON chapters(manga_id,lang,number_key,state)`); err != nil {
+		return nil, err
+	}
+	if err := initReaderChapters(&DB{DB: db}); err != nil {
+		return nil, err
+	}
+	var hasFeedSource int
+	db.QueryRow(`SELECT count(*) FROM pragma_table_info('chapter_feeds') WHERE name='source'`).Scan(&hasFeedSource)
+	if hasFeedSource == 0 {
+		if _, err := db.Exec(`ALTER TABLE chapter_feeds ADD COLUMN source TEXT NOT NULL DEFAULT 'json'`); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := db.Exec(syncSchema); err != nil {
 		return nil, fmt.Errorf("create sync schema: %w", err)
@@ -703,6 +763,8 @@ func (db *DB) mangaLangs(mangaID string) []LangCount {
 
 type Chapter struct {
 	ID         string
+	ReaderID   int64 // persistent Kotodex identity, shared by source copies
+	Primary    bool
 	MangaID    string
 	Volume     string
 	Number     string
@@ -719,19 +781,26 @@ type Chapter struct {
 	Downloaded int64
 	Queued     int64 // only set for insertChapter
 
+	Source      string
+	SourceRef   string
+	SourceURL   string
+	RemotePages []string
+	FeedURL     string // transient binding guard for discovery; not stored on chapters
+
 	MangaTitle string // filled by queue queries
 }
 
-const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded`
+const chapterCols = `c.id,c.manga_id,c.volume,c.number,c.title,c.lang,c.grp,c.published,c.pages,c.state,c.tries,c.error,c.files,c.size,c.downloaded,c.source,c.source_ref,c.source_url,c.remote_pages,coalesce(c.reader_id,0),EXISTS(SELECT 1 FROM reader_chapters rc WHERE rc.id=c.reader_id AND rc.primary_id=c.id AND c.state=2)`
 
 func scanChapter(sc interface{ Scan(...any) error }, extra ...any) (*Chapter, error) {
 	c := &Chapter{}
-	var files string
-	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded}, extra...)
+	var files, remotePages string
+	dest := append([]any{&c.ID, &c.MangaID, &c.Volume, &c.Number, &c.Title, &c.Lang, &c.Group, &c.Published, &c.Pages, &c.State, &c.Tries, &c.Error, &files, &c.Size, &c.Downloaded, &c.Source, &c.SourceRef, &c.SourceURL, &remotePages, &c.ReaderID, &c.Primary}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(files), &c.Files)
+	json.Unmarshal([]byte(remotePages), &c.RemotePages)
 	return c, nil
 }
 
@@ -762,6 +831,9 @@ const chapterOrder = `CAST(NULLIF(c.volume,'') AS REAL) IS NULL, CAST(NULLIF(c.v
 const queueOrder = `c.tries, c.queued, c.manga_id, ` + chapterOrder
 
 func (db *DB) chapters(mangaID string) ([]*Chapter, error) {
+	if err := db.repairChapterPrimaries(mangaID); err != nil {
+		return nil, err
+	}
 	return db.queryChapters(`SELECT `+chapterCols+` FROM chapters c WHERE c.manga_id=? ORDER BY `+chapterOrder, mangaID)
 }
 
@@ -818,19 +890,29 @@ func (db *DB) nextQueued() (*Chapter, error) {
 	return scanChapter(db.QueryRow(`SELECT ` + chapterCols + ` FROM chapters c WHERE c.state=1 ORDER BY ` + queueOrder + ` LIMIT 1`))
 }
 
-// insertChapter adds a chapter MangaDex reported. Existing rows only get their
+// insertChapter adds a chapter a source reported. Existing rows only get their
 // metadata refreshed and keep their download state.
 func (db *DB) insertChapter(c *Chapter) (bool, error) {
-	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
-		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued)
+	normalizeChapter(c)
+	if c.Source == "" {
+		c.Source = "mangadex"
+	}
+	remote, _ := json.Marshal(nonNil(c.RemotePages))
+	res, err := db.Exec(`INSERT INTO chapters(id,manga_id,volume,number,title,lang,grp,published,pages,state,queued,source,source_ref,source_url,remote_pages,volume_key,number_key)
+		SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (?='' OR EXISTS(
+			SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?)) ON CONFLICT(id) DO NOTHING`,
+		c.ID, c.MangaID, c.Volume, c.Number, c.Title, c.Lang, c.Group, c.Published, c.Pages, c.State, c.Queued, c.Source, c.SourceRef, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.FeedURL, c.MangaID, c.FeedURL, c.Source)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		_, err = db.Exec(`UPDATE chapters SET volume=?,number=?,title=?,grp=?,published=?,pages=? WHERE id=?`,
-			c.Volume, c.Number, c.Title, c.Group, c.Published, c.Pages, c.ID)
+		_, err = db.Exec(`UPDATE chapters SET volume=?,number=?,title=?,grp=?,published=?,pages=CASE WHEN state=2 THEN pages ELSE coalesce(nullif(?,0),pages) END,source_url=?,remote_pages=?,volume_key=?,number_key=? WHERE id=? AND source=? AND manga_id=? AND (?='' OR EXISTS(
+				SELECT 1 FROM chapter_feeds WHERE manga_id=? AND url=? AND source=?))`,
+			c.Volume, c.Number, c.Title, c.Group, c.Published, c.Pages, c.SourceURL, string(remote), numberKey(c.Volume), numberKey(c.Number), c.ID, c.Source, c.MangaID, c.FeedURL, c.MangaID, c.FeedURL, c.Source)
+	}
+	if err == nil {
+		err = db.bindReaderChapter(c.ID, false)
 	}
 	return n > 0, err
 }
@@ -842,10 +924,10 @@ func (db *DB) hasChapterNumber(mangaID, lang, volume, number string) bool {
 	if number == "" {
 		return false
 	}
-	var n int
-	db.QueryRow(`SELECT count(*) FROM chapters WHERE manga_id=? AND lang=? AND number=? AND (volume=? OR volume='' OR ?='') AND state IN (1,2)`,
-		mangaID, lang, number, volume, volume).Scan(&n)
-	return n > 0
+	var exists bool
+	db.QueryRow(`SELECT EXISTS(SELECT 1 FROM chapters WHERE manga_id=? AND lang=? AND state IN (1,2)
+		AND number_key=? AND (volume_key=? OR volume_key='' OR ?=''))`, mangaID, lang, numberKey(normalizeChapterNumber(number)), numberKey(normalizeChapterNumber(volume)), numberKey(normalizeChapterNumber(volume))).Scan(&exists)
+	return exists
 }
 
 func (db *DB) setChapterState(id string, state int) error {

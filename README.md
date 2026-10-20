@@ -11,6 +11,7 @@ Follow manga on MangaDex and have new chapters downloaded to your own server, th
 ## Features
 
 - Follow manga from a MangaDex search or a pasted MangaDex link, and Kotodex downloads new chapters as they come out.
+- Link MangaFire titles to existing manga, connect JSON chapter feeds, or upload chapters as an administrator. Chapters from every source share the same reader entry.
 - Link a MangaDex account to follow everything you already follow there.
 - Read downloaded chapters in Kotatsu, with its favorites, history, and new chapter notifications working like any other source.
 - Give each person their own account with their own follows, and see or sign out the devices on each account.
@@ -54,6 +55,116 @@ kotodex user passwd admin new-password
 # or with Docker
 docker compose exec kotodex /kotodex user passwd admin new-password
 ```
+
+## Additional chapter sources
+
+Open a manga page and expand **Manage sources**. Any signed-in reader can connect a source;
+only administrators can disconnect a shared source or upload chapter files.
+Choose **MangaFire**, paste its HTTPS title URL, and press **Connect source**. For example:
+`https://mangafire.to/title/72xyj-kyou-mo-veranda-dee`.
+Kotodex checks that title alongside MangaDex, including when the MangaDex chapter
+check fails. Match the series yourself when connecting it; Kotodex does not guess
+identity from similar titles. The catalog and manga IDs still come from MangaDex.
+
+The first check lists the source's existing chapters without downloading them.
+The chapter table starts with **MangaDex** selected. Open **Sources** beside the
+language filter, check **MangaFire**, and press **Apply** to add its releases.
+Uncheck MangaDex to show only the alternative. Language counts follow
+the selected sources. Unchecking every source shows no chapters and queues nothing.
+The filters are carried in the page URL and preserved when downloading.
+
+**Download all** considers only the currently visible sources and languages.
+The default priority is MangaDex, then MangaFire, then imported chapters. Use
+the up/down buttons in **Sources** to set the full order, then press **Apply**.
+Checkboxes choose visibility independently of the order. The ranking is preserved
+in the page URL, language changes, and bulk downloads; it never enables a hidden source or replaces an existing download.
+Within a source, the earliest release wins, with a stable ID as the tie-breaker.
+Individual chapter download buttons still let you deliberately pick an alternate.
+
+Kotodex gives each chapter a persistent numeric reader ID and associates its
+source copies with that identity. Only the downloaded **Primary** copy is sent
+to Kotatsu, producing one chapter list per language. Use **Make primary** on a
+downloaded alternate to change the copy served under the same reader ID and
+page reference. The source and scanlation group remain attached to each copy.
+Downloading an alternate does not replace an available primary. Deleting the
+primary falls back to another downloaded copy while retaining the reader ID.
+
+Update both the server and Android plugin to retain chapter identity when
+switching copies. The plugin uses the server's numeric ID directly; it falls
+back to the previous conversion when connecting to an older server. On server
+upgrade, the former numeric ID of the first downloaded copy is retained for
+each chapter. Previously exposed alternate copies had separate identities;
+their separate Kotatsu progress is not automatically combined. New identities
+are allocated by Kotodex, independently of source IDs and volume metadata.
+
+Already queued or downloaded chapter numbers in that language are skipped,
+including equivalent numbers such as `01` and `1.0`. Connectors normalize labels
+such as `Ch. 0012.50` to `12.5`, displayed as `Vol. 2 Ch. 12.5` when a volume is
+known. Different nonempty volume numbers stay distinct; an unspecified volume
+matches either. Numberless extras are kept separate. Identity comparisons use
+exact decimal values, and queuing checks for duplicates atomically.
+
+Future checks collect newly discovered, recent chapters across connected sources
+before applying the default source priority. Older uploads remain available for
+manual download. The page's source ranking does not change scheduled downloads.
+Disconnecting a source stops polling it and keeps its chapter records and local files.
+
+Administrators can also upload one chapter as a CBZ or ZIP, with chapter/volume,
+language, title, group, and optional attribution URL. Numberless chapters are
+supported. Images sort naturally by archive path and are stored without re-encoding.
+Limits are 256 MiB compressed, 512 MiB expanded, 32 MiB per page, and 1000 pages;
+JPEG, PNG, GIF, and WebP are supported. By default, uploads of an already queued
+or downloaded chapter are refused; **Allow an alternate edition** explicitly keeps
+another version. Deleting an upload removes its record because there is no remote
+copy to retry. Reverse proxies must allow request bodies large enough for uploads.
+
+Downloaded MangaFire and feed pages preserve the source's bytes. Kotodex cannot
+promise that another source has the same resolution, edition, translation, or
+scanlation as MangaDex. The Data saver setting applies to MangaDex only. Source
+links remain visible in the chapter table. MangaFire support adapts the maintained
+[Kotatsu-Redo parser](https://github.com/Kotatsu-Redo/kotatsu-parsers-redo) at the
+revision documented in [its notice](server/third_party/kotatsu-parsers-redo/NOTICE.md).
+
+### JSON chapter feeds and connectors
+
+External adapters can expose an HTTP(S) JSON feed. Administrators can connect one
+under **Manage sources → Advanced adapters**. This technical format is omitted
+from the reader source picker; actual imported releases appear as **Imported chapters**. Feeds are newest first, page URLs are in reading order,
+`id` is stable within the feed, `published` is Unix seconds (optional), and numbers
+are decimal strings. An example:
+
+```json
+{
+  "chapters": [
+    {
+      "id": "release-123",
+      "number": "12.5",
+      "volume": "2",
+      "lang": "en",
+      "title": "Chapter title",
+      "group": "Scanlation group",
+      "published": 1792400000,
+      "url": "https://source.example/chapter/123",
+      "pages": ["https://images.example/123/001.png"]
+    }
+  ]
+}
+```
+
+The feed can contain at most 10000 chapters and 8 MiB of JSON. Feed/page requests
+can reach public addresses only, including after DNS resolution and redirects.
+They receive no Kotodex credentials, browser cookies, or personalized user-agent.
+URLs with embedded credentials are refused. Standard Go HTTP user-agents are used
+for MangaFire and JSON feeds; the existing MangaDex client retains its own agent.
+Adapters requiring authentication or browser challenges need a separate integration.
+
+Native connectors implement `ChapterSource` in `server/sources.go` and register
+in `newDownloader`. Implement `NormalizeReference` to validate/canonicalize a
+linked title URL and appear automatically in the source picker. Connectors provide
+chapter discovery, page resolution, and
+fetching so source-specific request signing and rate limits stay out of the worker.
+Keep remote identities separate from the canonical manga ID. The shared worker
+handles downloads, retries, cancellation, progress, and local page serving.
 
 ## Requirements
 

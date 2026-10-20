@@ -266,3 +266,62 @@ fieldset.choices { flex-direction: column; flex-wrap: nowrap; gap: 6px; }
 .colmenu-list > .link { align-self: flex-start; margin-top: 4px; }
 th[draggable="true"] { cursor: grab; }
 button:disabled { opacity: 0.4; cursor: default; filter: none; }
+
+.fixed .c-source { width: 120px; }
+.source-import { margin: 1.5rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 6px; }
+.source-import summary { cursor: pointer; }
+.source-import .row { flex-wrap: wrap; align-items: end; margin: .75rem 0; }
+.source-import label:not(.check) { display: grid; gap: .3rem; }
+
+/* Source selection stays in a compact menu beside the language filter. */
+.source-filter { position: relative; }
+.source-filter > summary { list-style: none; gap: 7px; white-space: nowrap; }
+.source-filter > summary::-webkit-details-marker { display: none; }
+.source-filter > summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); margin: -3px 1px 0 5px; }
+.source-filter[open] > summary { border-color: var(--accent); }
+.source-filter-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 3; width: 280px; padding: 16px; display: grid; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / .14); }
+.source-options { list-style: none; display: grid; gap: 10px; padding: 0; margin: 0; }
+.source-option { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.source-rank { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.source-option label { display: flex; min-height: 28px; }
+.source-option input[type=checkbox] { margin: 0; accent-color: var(--accent); }
+.source-moves { display: flex; gap: 4px; }
+.source-moves button { width: 26px; height: 26px; padding: 0; justify-content: center; }
+.source-filter-apply { justify-content: center; }
+.adapter-settings { margin-top: 16px; }
+.chapters-head .filters { flex-wrap: wrap; justify-content: flex-end; }
+
+/* Reserve space for the title; narrow panes scroll the table instead of
+   collapsing flexible columns. The budget follows the visible column set. */
+#live-chapters { overflow-x: auto; }
+table.chapters {
+  --chapter-label: 128px;
+  --chapter-actions: 88px;
+  min-width: calc(1px + var(--chapter-label) + var(--chapter-actions)
+    + var(--chapter-title, 0px) + var(--chapter-lang, 0px)
+    + var(--chapter-group, 0px) + var(--chapter-date, 0px)
+    + var(--chapter-pages, 0px) + var(--chapter-you, 0px)
+    + var(--chapter-status, 0px) + var(--chapter-source, 0px));
+}
+.chapters:has(col.c-title) { --chapter-title: 180px; }
+.chapters:has(col.c-lang) { --chapter-lang: 96px; }
+.chapters:has(col.c-group) { --chapter-group: 112px; }
+.chapters:has(col.c-date) { --chapter-date: 100px; }
+.chapters:has(col.c-pages) { --chapter-pages: 56px; }
+.chapters:has(col.c-you) { --chapter-you: 120px; }
+.chapters:has(col.c-status) { --chapter-status: 144px; }
+.chapters:has(col.c-source) { --chapter-source: 96px; }
+.chapters .c-chapter { width: var(--chapter-label); }
+.chapters .c-lang { width: var(--chapter-lang); }
+.chapters .c-group { width: var(--chapter-group); }
+.chapters .c-date { width: var(--chapter-date); }
+.chapters .c-pages { width: var(--chapter-pages); }
+.chapters .c-you { width: var(--chapter-you); }
+.chapters .c-status { width: var(--chapter-status); }
+.chapters .c-source { width: var(--chapter-source); }
+.chapters .c-actions { width: var(--chapter-actions); }
+.chapters.compact th, .chapters.compact td { padding-left: 8px; padding-right: 8px; }
+.chapters th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chapters td.actions form { margin-left: 0; }
+
+.chapters:not(:has(col.c-title)) .c-chapter { width: auto; }

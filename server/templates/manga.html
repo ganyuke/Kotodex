@@ -34,6 +34,50 @@
   </div>
 </div>
 
+{{if $admin}}
+<details class="source-import">
+  <summary>Upload chapter files</summary>
+  <p>Upload one chapter as a CBZ or ZIP of JPEG, PNG, WebP or GIF pages. Pages sort by filename (page2 before page10). Uploads appear in this manga's chapter list and Kotatsu.</p>
+  <form method="post" action="/manga/{{$m.ID}}/upload" enctype="multipart/form-data" hx-boost="false">
+    <div class="row">
+      <label>Chapter <input name="number" placeholder="12.5" maxlength="40"></label>
+      <label>Volume <input name="volume" placeholder="Optional" maxlength="40"></label>
+      <label>Language <select name="lang">{{range $d.UploadLangs}}<option value="{{.Code}}"{{if eq .Code "en"}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+    </div>
+    <div class="row">
+      <label>Title <input name="title" maxlength="500"></label>
+      <label>Scanlation group <input name="group" maxlength="500"></label>
+      <label>Original source URL <input type="url" name="source_url" maxlength="2000" placeholder="Optional"></label>
+    </div>
+    <p><label>Chapter archive (up to 256 MiB) <input type="file" name="archive" accept=".cbz,.zip" required></label></p>
+    <p><label class="check"><input type="checkbox" name="alternate" value="1"> Allow an alternate edition of an already downloaded or queued chapter</label></p>
+    <button>Upload chapter</button>
+  </form>
+</details>
+{{end}}
+
+<details class="source-import">
+  <summary>Manage sources</summary>
+  <p>Link another source for this manga, then select it in the chapter filter below. Connecting lists existing chapters without downloading them.</p>
+  <div id="live-feeds">{{template "live-feeds" .}}</div>
+  <form method="post" action="/manga/{{$m.ID}}/feeds" class="row">
+    <label>Source <select name="source">{{range $d.LinkSources}}<option value="{{.Code}}"{{if eq .Code "mangafire"}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+    <label>URL <input type="url" name="url" maxlength="2000" required placeholder="https://mangafire.to/title/…"></label>
+    <button>Connect source</button>
+  </form>
+  {{if $admin}}
+  <details class="adapter-settings">
+    <summary>Advanced adapters</summary>
+    <p>Connect a JSON chapter feed supplied by an external adapter.</p>
+    <form method="post" action="/manga/{{$m.ID}}/feeds" class="row">
+      <input type="hidden" name="source" value="json">
+      <label>Feed URL <input type="url" name="url" maxlength="2000" required placeholder="https://adapter.example/chapters.json"></label>
+      <button class="secondary">Connect adapter</button>
+    </form>
+  </details>
+  {{end}}
+</details>
+
 <div id="live-readers">{{template "live-readers" .}}</div>
 
 <div class="head chapters-head">
@@ -55,18 +99,48 @@
         <button type="button" class="small link" data-col-reset>Reset columns</button>
       </div>
     </details>
-    <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger='submit, change from:"find select"' hx-target="body" hx-push-url="true">
+    <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger="submit" hx-target="body" hx-push-url="true">
+      <input type="hidden" name="sources" value="1">
+      <input type="hidden" name="lang" value="{{$d.Filter}}">
+      <details class="source-filter" id="chapter-source-filter">
+        <summary class="button secondary">Sources <span class="muted">{{if eq (len $d.Sources) 1}}{{sourceLabel (index $d.Sources 0)}}{{else}}{{len $d.Sources}} selected{{end}}</span></summary>
+        <div class="source-filter-menu">
+          <ol class="source-options" aria-label="Source priority">
+            {{$last := add (len $d.SourceOptions) -1}}
+            {{range $i, $source := $d.SourceOptions}}
+            <li class="source-option" data-source-row="{{.Code}}">
+              <input type="hidden" name="priority" value="{{.Code}}">
+              <span class="source-rank" aria-hidden="true">{{add $i 1}}</span>
+              <label class="check"><input type="checkbox" name="source" value="{{.Code}}"{{if index $d.SelectedSources .Code}} checked{{end}}> {{.Name}}</label>
+              <span class="source-moves">
+                <button type="button" class="small secondary" data-source-move="-1" aria-label="Move {{.Name}} up"{{if eq $i 0}} disabled{{end}}>&uarr;</button>
+                <button type="button" class="small secondary" data-source-move="1" aria-label="Move {{.Name}} down"{{if eq $i $last}} disabled{{end}}>&darr;</button>
+              </span>
+            </li>
+            {{end}}
+          </ol>
+          <button class="source-filter-apply">Apply</button>
+        </div>
+      </details>
+    </form>
+    <form method="get" action="/manga/{{$m.ID}}" hx-get="/manga/{{$m.ID}}" hx-trigger="submit, change" hx-target="body" hx-push-url="true">
+      <input type="hidden" name="sources" value="1">
+      {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}
+      {{range $d.SourceOptions}}<input type="hidden" name="priority" value="{{.Code}}">{{end}}
       <select id="live-langs" name="lang" aria-label="Language">{{template "live-langs" .}}</select>
       <noscript><button class="small secondary">Show</button></noscript>
     </form>
     <form method="post" action="/manga/{{$m.ID}}/download-all">
+      <input type="hidden" name="sources" value="1">
+      {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}
+      {{range $d.SourceOptions}}<input type="hidden" name="priority" value="{{.Code}}">{{end}}
       {{range $d.Shown}}<input type="hidden" name="lang" value="{{.}}">{{end}}
       <input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}">
       <button class="secondary">{{if not $d.Shown}}Download all chapters{{else if eq (len $d.Shown) 1}}Download all {{lang (index $d.Shown 0)}} chapters{{else}}Download all chapters in your languages{{end}}</button>
     </form>
   </div>
 </div>
-<div id="live-chapters">{{template "live-chapters" .}}</div>
+<div id="live-chapters" role="region" aria-label="Chapter table" tabindex="0">{{template "live-chapters" .}}</div>
 {{end}}
 
 {{define "live-facts"}}
@@ -83,7 +157,7 @@
 {{define "live-langs"}}
 {{$d := .Data}}{{$m := $d.Manga}}
 {{if gt (len $d.Mine) 1}}<option value=""{{if eq $d.Filter ""}} selected{{end}}>Your languages ({{$d.MineCount.Downloaded}} of {{$d.MineCount.Chapters}} downloaded)</option>{{end}}
-<option value="all"{{if eq $d.Filter "all"}} selected{{end}}>All languages ({{$m.Downloaded}} of {{$m.Known}} downloaded)</option>
+<option value="all"{{if eq $d.Filter "all"}} selected{{end}}>All languages ({{$d.SourceCount.Downloaded}} of {{$d.SourceCount.Chapters}} downloaded)</option>
 {{range $d.LangOptions}}<option value="{{.Code}}"{{if eq .Code $d.Filter}} selected{{end}}>{{with flag .Code}}{{.}} {{end}}{{lang .Code}} ({{.Downloaded}} of {{.Chapters}} downloaded)</option>{{end}}
 {{end}}
 
@@ -99,11 +173,12 @@
     <td title="{{chapterLabel .}}">{{chapterLabel .}}</td>
     {{range $d.Columns}}
     {{if eq .Name "title"}}<td title="{{$c.Title}}">{{$c.Title}}</td>
-    {{else if eq .Name "lang"}}<td>{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
+    {{else if eq .Name "lang"}}<td title="{{lang $c.Lang}}">{{with flag $c.Lang}}<span class="flag" aria-hidden="true">{{.}}</span> {{end}}{{lang $c.Lang}}</td>
+    {{else if eq .Name "source"}}<td title="{{sourceLabel $c.Source}}">{{if $c.SourceURL}}<a href="{{$c.SourceURL}}" target="_blank" rel="noreferrer noopener">{{sourceLabel $c.Source}}</a>{{else}}{{sourceLabel $c.Source}}{{end}}</td>
     {{else if eq .Name "group"}}<td title="{{$c.Group}}">{{$c.Group}}</td>
     {{else if eq .Name "date"}}<td>{{date $c.Published}}</td>
     {{else if eq .Name "pages"}}<td class="num">{{$c.Pages}}</td>
-    {{else if eq .Name "you"}}<td>{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
+    {{else if eq .Name "you"}}<td title="{{with index $d.Reading.Chapters $c.ID}}{{.}}{{end}}">{{with index $d.Reading.Chapters $c.ID}}{{if eq . "Read"}}<span class="muted">Read</span>{{else}}<span class="pill active">{{.}}</span>{{end}}{{end}}</td>
     {{else if eq .Name "status"}}<td>
       {{if and $d.Current (eq $d.Current.ChapterID $c.ID)}}<span class="pill active">Downloading {{$d.Current.Done}}/{{$d.Current.Total}}</span>
       {{else if eq $c.State 2}}<span title="{{date $c.Downloaded}}">Downloaded</span>
@@ -113,7 +188,7 @@
     </td>{{end}}
     {{end}}
     <td class="actions">
-      {{if eq .State 2}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
+      {{if eq .State 2}}{{if .Primary}}<span class="muted" title="Copy served to Kotatsu">Primary</span>{{else}}<form method="post" action="/chapter/{{.ID}}/primary"><input type="hidden" name="next" value="/manga/{{$m.ID}}{{if $d.Query}}?{{$d.Query}}{{end}}"><button class="small link">Make primary</button></form>{{end}}{{if $admin}}<form method="post" action="/chapter/{{.ID}}/delete"><button class="small link">Delete</button></form>{{end}}
       {{else if eq .State 1}}<form method="post" action="/chapter/{{.ID}}/cancel"><button class="small link">Cancel</button></form>
       {{else if eq .State 3}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Retry</button></form>
       {{else}}<form method="post" action="/chapter/{{.ID}}/download"><button class="small link">Download</button></form>{{end}}
@@ -123,7 +198,7 @@
   </tbody>
 </table>
 {{else}}
-<p class="empty">{{if not $m.Checked}}{{if $m.Followers}}Fetching the chapter list.{{else}}Follow this manga to fetch its chapters.{{end}}{{else if not $d.Shown}}MangaDex has no chapters for this manga.{{else if eq (len $d.Shown) 1}}No chapters in {{lang (index $d.Shown 0)}}.{{else}}No chapters in your languages.{{end}}</p>
+<p class="empty">{{if not $d.Sources}}Select at least one source.{{else if $m.Known}}No chapters match the selected sources and languages.{{else if not $m.Checked}}{{if $m.Followers}}Fetching the chapter list.{{else}}Follow this manga to fetch its chapters.{{end}}{{else if not $d.Shown}}No chapters have been found for this manga.{{else if eq (len $d.Shown) 1}}No chapters in {{lang (index $d.Shown 0)}}.{{else}}No chapters in your languages.{{end}}</p>
 {{end}}
 {{end}}
 
@@ -156,5 +231,16 @@
   {{end}}
   </tbody>
 </table>
+{{end}}
+{{end}}
+
+{{define "live-feeds"}}
+{{range .Data.ChapterFeeds}}
+{{if or $.User.Admin (ne .Source "json")}}
+<div class="row">
+  <span>{{sourceLabel .Source}} · {{.URL}} · Checked {{ago .Checked}}{{if .Error}} · {{.Error}}{{end}}</span>
+  {{if $.User.Admin}}<form method="post" action="/manga/{{$.Data.Manga.ID}}/feeds"><input type="hidden" name="url" value="{{.URL}}"><input type="hidden" name="source" value="{{.Source}}"><input type="hidden" name="remove" value="1"><button class="small secondary">Disconnect</button></form>{{end}}
+</div>
+{{end}}
 {{end}}
 {{end}}

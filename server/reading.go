@@ -40,9 +40,8 @@ func shareArgs(viewerID int64, more ...any) []any {
 	return append([]any{sql.Named("viewer", viewerID), sql.Named("kotodex", kotodexSource)}, more...)
 }
 
-// stableID is the plugin's ID for a manga or chapter: 64-bit FNV-1a of
-// "manga:<id>" or "chapter:<id>". Kotatsu keeps these as its own IDs, so they
-// come back in synced history.
+// stableID is the plugin's manga ID and its legacy chapter ID conversion.
+// New chapter identities are persisted directly in reader_chapters.
 func stableID(s string) int64 {
 	h := uint64(0xcbf29ce484222325)
 	for _, b := range []byte(s) {
@@ -208,6 +207,13 @@ func (ci *chapterIndex) chapter(mangaID string, id int64) *Chapter {
 		list, _ := ci.db.chapters(mangaID)
 		for _, c := range list {
 			m[stableID("chapter:"+c.ID)] = c
+		}
+		for _, c := range list {
+			// Keep progress labels available even while all copies are deleted
+			// or waiting to download, then prefer the selected copy when present.
+			if _, exists := m[c.ReaderID]; c.ReaderID != 0 && (!exists || c.Primary) {
+				m[c.ReaderID] = c
+			}
 		}
 		ci.byManga[mangaID] = m
 	}

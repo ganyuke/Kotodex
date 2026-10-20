@@ -30,6 +30,9 @@ type apiManga struct {
 
 type apiChapter struct {
 	ID        string   `json:"id"`
+	ReaderID  int64    `json:"readerId"`
+	Source    string   `json:"source"`
+	SourceURL string   `json:"sourceUrl,omitempty"`
 	Title     string   `json:"title"`
 	Number    *float64 `json:"number"` // null for oneshots and extras without a number
 	Volume    int      `json:"volume"`
@@ -50,10 +53,13 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 }
 
 func (s *Server) toAPIManga(u *User, m *Manga) apiManga {
+	// Storage counts include alternate copies; the reader sees logical chapters.
+	downloaded := m.Downloaded
+	s.db.QueryRow(`SELECT count(DISTINCT reader_id) FROM chapters WHERE manga_id=? AND state=2`, m.ID).Scan(&downloaded)
 	a := apiManga{
 		ID: m.ID, Title: m.Title, AltTitles: nonNil(m.AltTitles), Description: m.Description,
 		Authors: nonNil(m.Authors), Status: m.Status, Rating: m.Rating, Tags: nonNil(m.Tags), Year: m.Year,
-		PublicURL: "https://mangadex.org/title/" + m.ID, Chapters: m.Downloaded, Updated: m.Latest * 1000,
+		PublicURL: "https://mangadex.org/title/" + m.ID, Chapters: downloaded, Updated: m.Latest * 1000,
 	}
 	if m.Cover != "" {
 		a.CoverURL = s.coverURL(u, m, thumbPath(m))
@@ -136,7 +142,7 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	chapters, err := s.db.readableChapters(m.ID)
+	chapters, err := s.db.readerChapters(m.ID)
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, userMessage(err))
 		return
@@ -152,7 +158,7 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 		}
 		vol, _ := strconv.ParseFloat(c.Volume, 64)
 		out.ChapterList = append(out.ChapterList, apiChapter{
-			ID: c.ID, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
+			ID: c.ID, ReaderID: c.ReaderID, Source: c.Source, SourceURL: c.SourceURL, Title: c.Title, Number: num, Volume: int(vol), Lang: c.Lang,
 			Group: c.Group, Published: c.Published * 1000, Pages: len(c.Files),
 		})
 	}
@@ -161,7 +167,19 @@ func (s *Server) apiManga(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiPages(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	c, err := s.db.chapter(r.PathValue("id"))
+	id := r.PathValue("id")
+	var c *Chapter
+	var err error
+	if value, ok := strings.CutPrefix(id, "reader:"); ok {
+		var readerID int64
+		readerID, err = strconv.ParseInt(value, 10, 64)
+		if err == nil {
+			c, err = s.db.primaryChapter(readerID)
+		}
+	} else {
+		// Old connector versions and previously cached chapter URLs.
+		c, err = s.db.chapter(id)
+	}
 	if err != nil || c.State != stateDone {
 		apiError(w, http.StatusNotFound, "Not downloaded")
 		return

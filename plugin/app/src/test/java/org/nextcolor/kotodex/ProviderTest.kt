@@ -29,6 +29,7 @@ class ProviderTest {
     private lateinit var server: HttpServer
     private lateinit var provider: MangaProvider
     private val requests = mutableListOf<String>()
+    private var readerChapters: String? = null
     private val auth = "content://org.nextcolor.kotodex.manga"
 
     private val manga = """{"id":"m1","title":"Akanabe","altTitles":["茜部先生"],"description":"Desc",
@@ -42,6 +43,7 @@ class ProviderTest {
             val (status, body) = when {
                 ex.requestHeaders.getFirst("Authorization") != "Bearer good" -> 401 to """{"error":"Signed out"}"""
                 ex.requestURI.path == "/api/v1/manga" -> 200 to "[$manga]"
+                ex.requestURI.path == "/api/v1/manga/m1" && readerChapters != null -> 200 to manga.dropLast(1) + ",\"chapterList\":" + readerChapters + "}"
                 ex.requestURI.path == "/api/v1/manga/m1" -> 200 to manga.dropLast(1) + ""","chapterList":[
                     {"id":"c1","title":"","number":1,"volume":1,"lang":"en","group":"G","published":1000},
                     {"id":"c2","title":"Two","number":2,"volume":1,"lang":"en","group":"G","published":2000},
@@ -51,6 +53,7 @@ class ProviderTest {
                     {"id":"c6","title":"Another extra","number":null,"volume":0,"lang":"en","group":"G","published":6000},
                     {"id":"c7","title":"","number":1,"volume":0,"lang":"es-la","group":"","published":7000}]}"""
                 ex.requestURI.path == "/api/v1/chapters/c2/pages" -> 200 to """["/img/1/s/m1/c2/001.jpg","/img/1/s/m1/c2/002.jpg"]"""
+                ex.requestURI.path == "/api/v1/chapters/reader:9007199254740993/pages" -> 200 to """["/img/1/s/m1/primary/001.jpg"]"""
                 ex.requestURI.path == "/api/v1/tags" -> 200 to """["Comedy","Sci:Fi"]"""
                 else -> 404 to """{"error":"Not found"}"""
             }
@@ -114,6 +117,26 @@ class ProviderTest {
         c.moveToFirst()
         assertEquals("c1", c.str("url"))
         assertEquals(1000L, c.getLong(c.getColumnIndexOrThrow("upload_date")))
+    }
+
+    @Test fun persistentReaderIdentitySurvivesPrimaryChange() {
+        // Larger than an exact JavaScript double; it must cross JSON as a Long.
+        val id = 9007199254740993L
+        fun selected(sourceId: String, volume: Int): Pair<Long, String?> {
+            readerChapters = """[{"id":"$sourceId","readerId":$id,"number":2,"volume":$volume,"lang":"en"}]"""
+            val c = query("$auth/manga/chapters/m1")
+            c.moveToFirst()
+            assertEquals("English", c.str("branch"))
+            return (c.getLong(c.getColumnIndexOrThrow("id")) to c.str("url")).also { c.close() }
+        }
+        val original = selected("mangadex-copy", 2)
+        val replacement = selected("mangafire-copy", 0)
+        assertEquals(id, original.first)
+        assertEquals("reader:$id", original.second)
+        assertEquals(original, replacement)
+        val pages = query("$auth/chapters/" + Uri.encode(replacement.second))
+        assertEquals(1, pages.count)
+        assertTrue(requests.last().startsWith("/api/v1/chapters/reader%3A$id/pages"))
     }
 
     @Test fun pages() {
