@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Reading activity
@@ -94,10 +95,35 @@ type SyncedManga struct {
 
 func (m *SyncedManga) FromKotodex() bool { return m.Source == kotodexSource }
 
+// Kotatsu's own MangaDex source, by the name its sync sends.
+const kotatsuMangaDex = "MANGADEX"
+
+// kotatsuUID is how Kotatsu's parsers make manga and chapter IDs
+// (generateUid in kotatsu-parsers): Java's string hash, over the source name
+// and then the item's ID, starting from a fixed seed.
+func kotatsuUID(source, id string) int64 {
+	h := int64(1125899906842597)
+	for _, c := range utf16.Encode([]rune(source + id)) {
+		h = 31*h + int64(c)
+	}
+	return h
+}
+
+// fromKotatsuMangaDex reports whether this manga was read on Kotatsu's
+// MangaDex source, whose URL is the MangaDex ID. Its own ID is checked
+// against the hash, so a parser that makes IDs some other way is never
+// matched with the wrong chapters.
+func (m *SyncedManga) fromKotatsuMangaDex() bool {
+	return m.Source == kotatsuMangaDex && m.ID == kotatsuUID(kotatsuMangaDex, m.URL)
+}
+
 // SourceName is how the app's source names read on a page.
 func (m *SyncedManga) SourceName() string {
 	if m.FromKotodex() {
 		return "Kotodex"
+	}
+	if m.Source == kotatsuMangaDex {
+		return "MangaDex"
 	}
 	s := strings.TrimPrefix(m.Source, "content:")
 	if i := strings.Index(s, "/"); i >= 0 {
@@ -213,6 +239,10 @@ func (ci *chapterIndex) chapter(mangaID string, id int64) *Chapter {
 		list, _ := ci.db.chapters(mangaID)
 		for _, c := range list {
 			m[stableID("chapter:"+c.ID)] = c
+			// The same chapter read on Kotatsu's MangaDex source.
+			if c.Source == "mangadex" {
+				m[kotatsuUID(kotatsuMangaDex, c.SourceRef)] = c
+			}
 		}
 		for _, c := range list {
 			// Keep progress labels available even while all copies are deleted
@@ -239,6 +269,12 @@ func (ci *chapterIndex) local(mangaDexID string) *Manga {
 // manga from other sources show once they're downloaded, if an admin allowed
 // that.
 func (s *Server) fill(u *User, ci *chapterIndex, m *SyncedManga) {
+	if m.fromKotatsuMangaDex() {
+		// In the library too, so its chapters can be named.
+		if l := ci.local(m.URL); l != nil {
+			m.Local = l
+		}
+	}
 	if !m.FromKotodex() {
 		if ci.otherCovers && m.CoverURL != "" {
 			if path := s.covers.cached(m.CoverURL); path != "" {

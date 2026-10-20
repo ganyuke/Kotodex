@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Names as MangaFire sends them.
@@ -137,5 +139,39 @@ func TestPlaceWhere(t *testing.T) {
 		if got := p.Where(); got != tc.want {
 			t.Errorf("%v of %d: %q, want %q", tc.percent, tc.chapters, got, tc.want)
 		}
+	}
+}
+
+// Values computed outside Go, with Kotlin's 64-bit overflow.
+func TestKotatsuUID(t *testing.T) {
+	if got := kotatsuUID("MANGADEX", mangaA); got != 6946276950196467221 {
+		t.Fatalf("manga: %d", got)
+	}
+	if got := kotatsuUID("MANGADEX", chapter1); got != -3557813573409852259 {
+		t.Fatalf("chapter: %d", got)
+	}
+}
+
+func TestReadOnKotatsuMangaDex(t *testing.T) {
+	s, ts := testServer(t)
+	seed(t, s)
+	token := syncToken(t, ts)
+	row := func(mangaID int64) string {
+		manga := strings.ReplaceAll(syncManga(mangaID, mangaA), kotodexSource, "MANGADEX")
+		return fmt.Sprintf(`{"manga_id":%d,"created_at":1000,"updated_at":%d,"chapter_id":%d,"page":4,"scroll":0.0,"percent":0.25,"deleted_at":0,"chapters":12,"manga":%s}`,
+			mangaID, time.Now().UnixMilli(), kotatsuUID("MANGADEX", chapter1), manga)
+	}
+	// The second manga's ID was made some other way, so its chapter is unknown.
+	if code, b := syncPost(t, ts, token, "/resource/history", `{"history":[`+row(kotatsuUID("MANGADEX", mangaA))+`,`+row(42)+`],"timestamp":1}`); code >= 300 {
+		t.Fatalf("sync: %d %s", code, b)
+	}
+	uid := int64(1)
+	w := adminRequest(t, s, uid, "GET", "/people/mio/reading", nil, "")
+	body := w.Body.String()
+	if !strings.Contains(body, "Ch. 10, page 5") || !strings.Contains(body, `href="/manga/`+mangaA+`"`) || !strings.Contains(body, "MangaDex") {
+		t.Fatalf("read on MangaDex: %s", body)
+	}
+	if strings.Count(body, "Ch. 10, page 5") != 1 || !strings.Contains(body, "Chapter 4 of 12") {
+		t.Fatalf("unmatched manga: %s", body)
 	}
 }
