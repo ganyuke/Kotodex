@@ -1,0 +1,7 @@
+See chapters taken down from MangaDex and add their pages as an administrator.
+Administrators can edit a chapter's number, volume, language, title, and group.
+Official MangaFire chapters are marked, in Kotatsu too, and listed before fan scans.
+Your chapter filters are remembered for each manga.
+Administrators can stop automatic checks for one manga.
+See which chapter someone is on when they read on Kotatsu's MangaDex source.
+You stay at the chapter after downloading, canceling, or deleting it.
