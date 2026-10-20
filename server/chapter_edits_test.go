@@ -342,3 +342,43 @@ func TestChapterFiltersRemembered(t *testing.T) {
 		t.Fatal("reset kept the filters")
 	}
 }
+
+func TestMangaChecksOff(t *testing.T) {
+	s, _ := testServer(t)
+	member := seed(t, s)
+	admin, _ := s.db.createUser("admin", "pw", true)
+	followed := func() int {
+		list, err := s.db.followedManga()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list)
+	}
+	if followed() != 1 {
+		t.Fatal("followed manga not checked")
+	}
+	form := func(off string) *bytes.Buffer { return bytes.NewBufferString(url.Values{"off": {off}}.Encode()) }
+	if w := adminRequest(t, s, member, "POST", "/manga/"+mangaA+"/checks", form("1"), "application/x-www-form-urlencoded"); w.Code != 403 {
+		t.Fatalf("member: %d", w.Code)
+	}
+	if w := adminRequest(t, s, admin, "POST", "/manga/"+mangaA+"/checks", form("1"), "application/x-www-form-urlencoded"); w.Code != 303 {
+		t.Fatalf("stop: %d", w.Code)
+	}
+	if followed() != 0 {
+		t.Fatal("stopped manga still checked")
+	}
+	if m, _ := s.db.manga(mangaA, member); !m.Following {
+		t.Fatal("stopping checks changed the follow")
+	}
+	body := adminRequest(t, s, admin, "GET", "/manga/"+mangaA, nil, "").Body.String()
+	if !strings.Contains(body, "(automatic checks stopped)") || !strings.Contains(body, "Resume automatic checks") {
+		t.Fatal("manga page doesn't say checks are stopped")
+	}
+	adminRequest(t, s, admin, "POST", "/manga/"+mangaA+"/checks", form(""), "application/x-www-form-urlencoded")
+	if followed() != 1 {
+		t.Fatal("resumed manga not checked")
+	}
+	if w := adminRequest(t, s, admin, "POST", "/manga/nope/checks", form("1"), "application/x-www-form-urlencoded"); w.Code != 404 {
+		t.Fatalf("unknown manga: %d", w.Code)
+	}
+}

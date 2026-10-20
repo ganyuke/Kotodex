@@ -759,6 +759,28 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// mangaChecks turns automatic checks for new chapters on or off for one
+// manga. Follows stay as they are.
+func (s *Server) mangaChecks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	off := r.FormValue("off") == "1"
+	res, err := s.db.Exec(`UPDATE manga SET checks_off=? WHERE id=?`, off, id)
+	if err != nil {
+		s.errorPage(w, r, http.StatusInternalServerError, userMessage(err))
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		s.notFound(w, r)
+		return
+	}
+	s.dl.Changed()
+	if off {
+		back(w, r, "/manga/"+id, "Automatic checks stopped.")
+	} else {
+		back(w, r, "/manga/"+id, "Automatic checks resumed.")
+	}
+}
+
 func (s *Server) mangaFiltersReset(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.db.Exec(`DELETE FROM chapter_filters WHERE user_id=? AND manga_id=?`, currentUser(r).ID, id)
@@ -1170,6 +1192,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /manga/{id}/feeds", s.web(false, s.mangaFeed))
 	mux.HandleFunc("POST /manga/{id}/check", s.web(false, s.mangaCheck))
 	mux.HandleFunc("POST /manga/{id}/filters/reset", s.web(false, s.mangaFiltersReset))
+	mux.HandleFunc("POST /manga/{id}/checks", s.web(true, s.mangaChecks))
 	mux.HandleFunc("POST /manga/{id}/download-all", s.web(false, s.mangaDownloadAll))
 	mux.HandleFunc("POST /manga/{id}/languages", s.web(false, s.mangaLanguages))
 	mux.HandleFunc("POST /manga/{id}/languages/reset", s.web(false, s.mangaLanguagesReset))

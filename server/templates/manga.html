@@ -17,6 +17,7 @@
       <form method="post" action="/manga/{{$m.ID}}/follow/reset"><button class="secondary icon-button" title="Match MangaDex ({{if $d.OnMangaDex}}following there{{else}}not following there{{end}})" aria-label="Match MangaDex">{{template "reseticon"}}</button></form>
       {{end}}
       <form method="post" action="/manga/{{$m.ID}}/check"><button class="secondary">Check for new chapters</button></form>
+      {{if $admin}}<form method="post" action="/manga/{{$m.ID}}/checks">{{if $m.ChecksOff}}<button class="secondary">Resume automatic checks</button>{{else}}<input type="hidden" name="off" value="1"><button class="secondary" title="This manga is left out of scheduled checks and of Check for new chapters on the Downloads page.">Stop automatic checks</button>{{end}}</form>{{end}}
       {{if $admin}}<form method="post" action="/manga/{{$m.ID}}/delete-files" hx-confirm="Delete every downloaded chapter of this manga?"><button class="danger">Delete downloads</button></form>{{end}}
     </div>
     {{if $m.Following}}
@@ -163,7 +164,7 @@
 <dt>Followers</dt><dd>{{$m.Followers}}</dd>
 {{with $d.Reading.InLists}}<dt>In lists</dt><dd>{{range $i, $l := .}}{{if $i}}, {{end}}{{$l.Title}} ({{$l.Count}}){{end}}</dd>{{end}}
 {{if $d.Linked}}<dt>Your MangaDex</dt><dd>{{if $d.OnMangaDex}}Following{{else}}Not following{{end}}</dd>{{end}}
-<dt>Last checked</dt><dd>{{ago $m.Checked}}</dd>
+<dt>Last checked</dt><dd>{{ago $m.Checked}}{{if $m.ChecksOff}} (automatic checks stopped){{end}}</dd>
 <dt>MangaDex</dt><dd><a href="https://mangadex.org/title/{{$m.ID}}" target="_blank" rel="noopener">Open on MangaDex</a></dd>
 {{end}}
 

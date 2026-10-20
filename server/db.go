@@ -145,6 +145,13 @@ func openDB(path string) (*DB, error) {
 		}
 		db.Exec(`UPDATE chapters SET queued=published WHERE state IN (1,3)`)
 	}
+	var hasChecksOff int
+	db.QueryRow(`SELECT count(*) FROM pragma_table_info('manga') WHERE name='checks_off'`).Scan(&hasChecksOff)
+	if hasChecksOff == 0 {
+		if _, err := db.Exec(`ALTER TABLE manga ADD COLUMN checks_off INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return nil, fmt.Errorf("add manga.checks_off: %w", err)
+		}
+	}
 	// Existing chapters belong to MangaDex. Source identities remain separate
 	// from the canonical manga ID used by the reader and reading history.
 	for _, col := range []struct{ name, def string }{
@@ -394,6 +401,7 @@ type Manga struct {
 	Refreshed   int64
 	Checked     int64
 	Latest      int64
+	ChecksOff   bool // left out of automatic checks for new chapters
 
 	// Filled by list queries.
 	Downloaded int
@@ -403,12 +411,12 @@ type Manga struct {
 	Following  bool
 }
 
-const mangaCols = `m.id,m.title,m.alt_titles,m.description,m.authors,m.status,m.rating,m.tags,m.year,m.cover,m.added,m.refreshed,m.checked,m.latest`
+const mangaCols = `m.id,m.title,m.alt_titles,m.description,m.authors,m.status,m.rating,m.tags,m.year,m.cover,m.added,m.refreshed,m.checked,m.latest,m.checks_off`
 
 func scanManga(sc interface{ Scan(...any) error }, extra ...any) (*Manga, error) {
 	m := &Manga{}
 	var alt, authors, tags string
-	dest := append([]any{&m.ID, &m.Title, &alt, &m.Description, &authors, &m.Status, &m.Rating, &tags, &m.Year, &m.Cover, &m.Added, &m.Refreshed, &m.Checked, &m.Latest}, extra...)
+	dest := append([]any{&m.ID, &m.Title, &alt, &m.Description, &authors, &m.Status, &m.Rating, &tags, &m.Year, &m.Cover, &m.Added, &m.Refreshed, &m.Checked, &m.Latest, &m.ChecksOff}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return nil, err
 	}
@@ -542,7 +550,7 @@ func (db *DB) allTags() ([]string, error) {
 
 // followedManga returns IDs of every manga at least one user follows.
 func (db *DB) followedManga() ([]*Manga, error) {
-	rows, err := db.Query(`SELECT ` + mangaCols + ` FROM manga m WHERE EXISTS(SELECT 1 FROM follows f WHERE f.manga_id=m.id) ORDER BY m.checked`)
+	rows, err := db.Query(`SELECT ` + mangaCols + ` FROM manga m WHERE EXISTS(SELECT 1 FROM follows f WHERE f.manga_id=m.id) AND NOT m.checks_off ORDER BY m.checked`)
 	if err != nil {
 		return nil, err
 	}
