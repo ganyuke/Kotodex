@@ -23,6 +23,40 @@ func selectedChapterSources(values url.Values) []string {
 	return out
 }
 
+// The query parameters of the chapter table's filters.
+var chapterFilterKeys = []string{"sources", "source", "priority", "prefer", "lang", "unavailable"}
+
+func chapterFilters(q url.Values) url.Values {
+	out := url.Values{}
+	for _, key := range chapterFilterKeys {
+		if q.Has(key) {
+			out[key] = q[key]
+		}
+	}
+	return out
+}
+
+// pageFilters are the filters a manga page shows. Filters in the address
+// are saved as this person's filters for the manga. Without any, the saved
+// ones are used, so the page looks the same when opened again.
+func (db *DB) pageFilters(userID int64, mangaID string, q url.Values) (filters url.Values, saved bool) {
+	filters = chapterFilters(q)
+	if len(filters) > 0 {
+		// Live updates repeat the page's address and change nothing.
+		if !q.Has("live") {
+			db.Exec(`INSERT INTO chapter_filters(user_id,manga_id,query) VALUES(?,?,?)
+				ON CONFLICT(user_id,manga_id) DO UPDATE SET query=excluded.query`, userID, mangaID, filters.Encode())
+		}
+		return filters, true
+	}
+	var query string
+	if db.QueryRow(`SELECT query FROM chapter_filters WHERE user_id=? AND manga_id=?`, userID, mangaID).Scan(&query) != nil {
+		return filters, false
+	}
+	parsed, _ := url.ParseQuery(query)
+	return chapterFilters(parsed), true
+}
+
 func visibleChapters(chapters []*Chapter, sources, languages []string) []*Chapter {
 	var out []*Chapter
 	for _, c := range chapters {

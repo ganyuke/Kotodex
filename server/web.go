@@ -639,7 +639,8 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	if m.Following {
 		mine = slices.Sorted(maps.Keys(followLangs))
 	}
-	filter := r.URL.Query().Get("lang")
+	filters, savedFilters := s.db.pageFilters(u.ID, m.ID, r.URL.Query())
+	filter := filters.Get("lang")
 	shown := mine
 	switch filter {
 	case "":
@@ -653,8 +654,8 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	default:
 		shown = []string{filter}
 	}
-	sources := selectedChapterSources(r.URL.Query())
-	priority := chapterSourcePriority(r.URL.Query())
+	sources := selectedChapterSources(filters)
+	priority := chapterSourcePriority(filters)
 	selectedSources := map[string]bool{}
 	available := map[string]bool{"mangadex": true}
 	for source := range s.dl.sources {
@@ -681,7 +682,7 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Chapters with no pages to download are hidden unless asked for.
 	// They aren't counted as chapters either, like on the library page.
-	showUnavailable := r.URL.Query().Get("unavailable") == "1"
+	showUnavailable := filters.Get("unavailable") == "1"
 	var listed, downloadable []*Chapter
 	unavailable := 0
 	for _, c := range all {
@@ -754,8 +755,14 @@ func (s *Server) mangaPage(w http.ResponseWriter, r *http.Request) {
 		"Shown": shown, "Mine": mine, "LangOptions": langOptions, "MineCount": mineCount, "Query": pageQuery(r),
 		"LangsCustom": langsCustom, "Linked": linked, "OnMangaDex": s.db.onMangaDex(u.ID, m.ID),
 		"FollowCustom":    linked && s.db.followChoice(u.ID, m.ID),
-		"ShowUnavailable": showUnavailable, "Unavailable": unavailable, "Here": strings.TrimSuffix("/manga/"+m.ID+"?"+pageQuery(r), "?"),
+		"ShowUnavailable": showUnavailable, "Unavailable": unavailable, "Here": strings.TrimSuffix("/manga/"+m.ID+"?"+pageQuery(r), "?"), "SavedFilters": savedFilters,
 	}})
+}
+
+func (s *Server) mangaFiltersReset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.db.Exec(`DELETE FROM chapter_filters WHERE user_id=? AND manga_id=?`, currentUser(r).ID, id)
+	http.Redirect(w, r, "/manga/"+id, http.StatusSeeOther)
 }
 
 func (s *Server) mangaCheck(w http.ResponseWriter, r *http.Request) {
@@ -1162,6 +1169,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /manga/{id}/upload", s.web(true, s.mangaUpload))
 	mux.HandleFunc("POST /manga/{id}/feeds", s.web(false, s.mangaFeed))
 	mux.HandleFunc("POST /manga/{id}/check", s.web(false, s.mangaCheck))
+	mux.HandleFunc("POST /manga/{id}/filters/reset", s.web(false, s.mangaFiltersReset))
 	mux.HandleFunc("POST /manga/{id}/download-all", s.web(false, s.mangaDownloadAll))
 	mux.HandleFunc("POST /manga/{id}/languages", s.web(false, s.mangaLanguages))
 	mux.HandleFunc("POST /manga/{id}/languages/reset", s.web(false, s.mangaLanguagesReset))

@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS follow_choices(
 	following INTEGER NOT NULL,
 	PRIMARY KEY(user_id, manga_id)
 );
+-- The chapter filters each person last used on a manga's page.
+CREATE TABLE IF NOT EXISTS chapter_filters(
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	manga_id TEXT NOT NULL,
+	query TEXT NOT NULL,
+	PRIMARY KEY(user_id, manga_id)
+);
 CREATE TABLE IF NOT EXISTS settings(
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL

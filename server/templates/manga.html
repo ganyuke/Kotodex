@@ -142,6 +142,7 @@
       <noscript><button class="small secondary">Show</button></noscript>
     </form>
     {{end}}
+    {{if $d.SavedFilters}}<form method="post" action="/manga/{{$m.ID}}/filters/reset"><button class="secondary icon-button" title="Use the default filters" aria-label="Use the default filters">{{template "reseticon"}}</button></form>{{end}}
     <form method="post" action="/manga/{{$m.ID}}/download-all">
       <input type="hidden" name="sources" value="1">
       {{range $d.Sources}}<input type="hidden" name="source" value="{{.}}">{{end}}

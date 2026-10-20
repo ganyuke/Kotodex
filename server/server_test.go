@@ -988,8 +988,10 @@ func TestMangaPageLanguages(t *testing.T) {
 		t.Fatal("all languages should show every chapter")
 	}
 
-	// Several languages of your own get their own entry.
+	// Several languages of your own get their own entry. The page would
+	// otherwise open on the "all" filter used above.
 	s.db.setFollowLangs(uid, mangaA, []string{"en", "fr"})
+	s.db.Exec(`DELETE FROM chapter_filters`)
 	page = get("/manga/" + mangaA)
 	if !strings.Contains(page, `<option value="" selected>Your languages (1 of 3 downloaded)`) || !strings.Contains(page, "Chapitre onze") {
 		t.Fatal("several languages should start on your languages")

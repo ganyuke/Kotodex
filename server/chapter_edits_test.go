@@ -173,7 +173,7 @@ func TestUnavailableChapterPages(t *testing.T) {
 		t.Fatalf("check undid the upload: %+v", c)
 	}
 	// Shown like any downloaded chapter.
-	w = adminRequest(t, s, admin, "GET", "/manga/"+mangaA, nil, "")
+	w = adminRequest(t, s, admin, "GET", "/manga/"+mangaA+"?unavailable=0", nil, "")
 	if !strings.Contains(w.Body.String(), `id="c-`+takenDown+`" class="state2"`) || strings.Contains(w.Body.String(), "unavailable chapter") {
 		t.Fatalf("uploaded chapter row: %s", w.Body)
 	}
@@ -304,5 +304,41 @@ func TestChapterEdits(t *testing.T) {
 	edit(admin, "/chapter/up/edit", url.Values{"number": {"2"}, "lang": {"en"}})
 	if c, _ := s.db.chapter("up"); c.Number != "2" || c.Edited {
 		t.Fatalf("upload edit: %+v", c)
+	}
+}
+
+func TestChapterFiltersRemembered(t *testing.T) {
+	s, _ := testServer(t)
+	mio := seed(t, s)
+	other, _ := s.db.createUser("ren", "pw", false)
+	s.db.insertChapter(&Chapter{ID: "fr", MangaID: mangaA, Number: "1", Lang: "fr", Title: "Bonjour"})
+	page := func(uid int64, query string) string {
+		return adminRequest(t, s, uid, "GET", "/manga/"+mangaA+query, nil, "").Body.String()
+	}
+	if strings.Contains(page(mio, ""), "Bonjour") {
+		t.Fatal("French chapter shown by default")
+	}
+	// The live stream repeats the address and saves nothing.
+	page(mio, "?sources=1&source=mangadex&lang=en&live=1")
+	if strings.Contains(page(mio, ""), "Use the default filters") {
+		t.Fatal("live stream saved filters")
+	}
+	page(mio, "?sources=1&source=mangadex&lang=fr")
+	if body := page(mio, ""); !strings.Contains(body, "Bonjour") || !strings.Contains(body, "Use the default filters") {
+		t.Fatal("filters not remembered")
+	}
+	if strings.Contains(page(other, ""), "Bonjour") {
+		t.Fatal("filters shared with someone else")
+	}
+	// Filters in the address win over saved ones.
+	if strings.Contains(page(mio, "?sources=1&source=mangadex&lang=en"), "Bonjour") {
+		t.Fatal("saved filters used over the address")
+	}
+	page(mio, "?sources=1&source=mangadex&lang=fr")
+	if w := adminRequest(t, s, mio, "POST", "/manga/"+mangaA+"/filters/reset", nil, ""); w.Code != 303 {
+		t.Fatalf("reset: %d", w.Code)
+	}
+	if body := page(mio, ""); strings.Contains(body, "Bonjour") || strings.Contains(body, "Use the default filters") {
+		t.Fatal("reset kept the filters")
 	}
 }
